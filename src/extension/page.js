@@ -65,7 +65,7 @@ class BridgePage extends React.Component {
       h("h3", null, "Recent operations"),
       h("ul", null, ...(s.receipts || []).sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt))).slice(0, 20).map(r => h("li", { key: r.id },
         `${r.projectId}/${r.packageId}: ${r.operation} - ${r.status}${r.error ? ": " + r.error : ""}`,
-        r.result?.verification?.deployed === "differences" ? " (deployed files differ)" : ""))),
+        (Array.isArray(r.verification) ? r.verification : [r.verification]).some(v => v?.deployed === "differences") ? " (deployed files differ)" : ""))),
     ));
   }
 }

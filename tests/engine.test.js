@@ -161,4 +161,28 @@ test("a running receipt from a stopped consumer becomes interrupted", async t =>
   assert.equal(f.deployments(), 0);
 });
 
+test("batch deployment validates all packages before activating and deploys once", async t => {
+  const f = await fixture(t);
+  f.config.packages.push({ id: "textures", displayName: "Textures", installation: "prepared-directory" });
+  await atomicJson(f.configPath, f.config);
+  await client.register(f.bridge, f.configPath);
+  const main = await client.stage(f.bridge, "demo", "main", f.artifact, "0.1.0");
+  const texturesRoot = path.join(f.root, "textures");
+  await fs.mkdir(texturesRoot);
+  await fs.writeFile(path.join(texturesRoot, "texture.bin"), "texture");
+  const textures = await client.stage(f.bridge, "demo", "textures", texturesRoot, "0.1.0");
+  await f.engine.tick();
+  const builds = [{ packageId: "main", buildId: main.buildId }, { packageId: "textures", buildId: textures.buildId }];
+  const bad = await client.submit(f.bridge, "demo", "main", "deploy-batch", { profileId: "p1", builds: [...builds, builds[0]] });
+  await f.engine.tick();
+  assert.match((await receipt(f.bridge, bad.id)).error, /multiple builds/);
+  assert.deepEqual(f.state.persistent.profiles.p1.modState, {});
+  const good = await client.submit(f.bridge, "demo", "main", "deploy-batch", { profileId: "p1", builds });
+  await f.engine.tick();
+  const result = await receipt(f.bridge, good.id);
+  assert.equal(result.status, "completed");
+  assert.equal(result.result.verification.length, 2);
+  assert.equal(f.deployments(), 1);
+});
+
 module.exports = { fixture };

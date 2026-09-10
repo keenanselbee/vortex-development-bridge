@@ -13,6 +13,16 @@ active. Vortex receives one deploy-mods request with the explicit profile ID.
 The adapter uses callback-first argument order verified against the upstream
 mod_management implementation; the generated events overview currently differs.
 
+For coordinated packages, use deploy-batch with a JSON array of packageId/buildId
+selections and one explicit profile. All selected stages are verified before any
+activation; Vortex deploys once. Receipts preserve prior enabled versions for every
+selection. This is not an atomic transaction: an activation/deployment failure can
+leave partial state, which the receipt records for explicit recovery.
+
+Client exit codes are 0 for success/queued submission, 1 for failure, 2 for a still
+pending receipt and 3 for verification differences or a disabled verification target.
+Read a request receipt or wait after submission; queue acceptance is not completion.
+
 The bridge checks live file hashes against the game's deployment root. Additional
 unrelated live files are permitted. A difference is reported rather than claiming
 which competing mod won. Custom filename transformations are not supported by the

@@ -5,7 +5,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { atomicJson, readJson, fingerprint, lock } = require("./files");
 const { identifier } = require("./config");
-const OPERATIONS = ["stage", "deploy", "verify", "promote"];
+const OPERATIONS = ["stage", "deploy", "deploy-batch", "verify", "promote"];
 
 function validateRequest(request, now = Date.now()) {
   if (request.protocolVersion !== 1 || !OPERATIONS.includes(request.operation)) throw new Error("Unsupported request protocol or operation");

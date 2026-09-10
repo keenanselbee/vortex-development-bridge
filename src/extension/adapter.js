@@ -107,7 +107,10 @@ function createAdapter(api, vortex) {
         games: Object.keys(state.settings?.gameMode?.discovered || {}),
         managed: Object.entries(state.persistent?.mods || {}).flatMap(([game, mods]) => Object.entries(mods)
           .filter(([, mod]) => mod.attributes?.vdbProjectId)
-          .map(([id, mod]) => ({ gameId: game, id, type: mod.type, ...mod.attributes, enabled: game === gameId && !!profile?.modState?.[id]?.enabled }))),
+          .map(([id, mod]) => ({ gameId: game, id, type: mod.type, name: mod.attributes.name, version: mod.attributes.version,
+            vdbProjectId: mod.attributes.vdbProjectId, vdbPackageId: mod.attributes.vdbPackageId,
+            vdbBuildId: mod.attributes.vdbBuildId, vdbPublication: mod.attributes.vdbPublication,
+            enabled: game === gameId && !!profile?.modState?.[id]?.enabled }))),
       };
     },
   };

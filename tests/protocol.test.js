@@ -10,6 +10,13 @@ const { makeRequest, enqueue, validateRequest, receipt } = require("../src/proto
 const config = { schemaVersion: 1, id: "demo", gameId: "eldenring", packages: [
   { id: "main", displayName: "Demo", installation: "prepared-directory" },
 ] };
+test("CLI exit codes distinguish deployment differences from completed verification", () => {
+  const { outcomeCode } = require("../src/client/cli");
+  assert.equal(outcomeCode({ status: "completed", result: { deployed: "differences" } }), 3);
+  assert.equal(outcomeCode({ status: "completed", result: { verification: [{ deployed: "verified" }, { deployed: "differences" }] } }), 3);
+  assert.equal(outcomeCode({ status: "completed", result: { deployed: "verified", enabled: true } }), 0);
+  assert.equal(outcomeCode({ status: "pending" }), 2);
+});
 async function scratch(t) {
   const root = path.resolve(".codex-temp/tests");
   await fs.mkdir(root, { recursive: true });

@@ -130,6 +130,36 @@ class Engine {
       note: "Different live bytes may be another mod's override; this check does not infer the winner or prove gameplay." };
   }
 
+  async deployBatch(request, config, progress) {
+    const { builds, profileId } = request.payload;
+    if (!profileId || !Array.isArray(builds) || !builds.length || builds.length > 100) throw new Error("Batch needs a profile and 1-100 builds");
+    const packages = new Set();
+    const prepared = [];
+    for (const selection of builds) {
+      if (packages.has(selection.packageId)) throw new Error("Batch selects multiple builds for one package");
+      packages.add(selection.packageId);
+      const pkg = config.packages.find(p => p.id === selection.packageId);
+      if (!pkg) throw new Error("Batch includes an unregistered package");
+      const subrequest = { ...request, packageId: pkg.id, payload: { buildId: selection.buildId, profileId } };
+      const loaded = await this.loadBuild(subrequest, config, pkg);
+      const siblings = Object.entries(loaded.context.mods).filter(([id, mod]) => id !== loaded.build.stagedId
+        && mod.attributes?.vdbProjectId === config.id && mod.attributes?.vdbPackageId === pkg.id
+        && loaded.context.profile.modState?.[id]?.enabled).map(([id]) => id);
+      prepared.push({ pkg, subrequest, build: loaded.build, siblings,
+        targetPreviouslyEnabled: !!loaded.context.profile.modState?.[loaded.build.stagedId]?.enabled });
+    }
+    await progress({ phase: "batch-validated", profileId, selections: prepared.map(x => ({ packageId: x.pkg.id, target: x.build.stagedId, previousEnabled: x.siblings, targetPreviouslyEnabled: x.targetPreviouslyEnabled })) });
+    for (const item of prepared) {
+      await progress({ phase: "batch-activating", packageId: item.pkg.id });
+      await this.adapter.activate(config.gameId, profileId, item.build.stagedId, item.siblings);
+    }
+    await progress({ phase: "deploying" });
+    await this.adapter.deploy(config.gameId, profileId);
+    const verification = [];
+    for (const item of prepared) verification.push({ packageId: item.pkg.id, ...await this.verify(item.subrequest, config, item.pkg) });
+    return { deployment: "completed", verification };
+  }
+
   async promote(request, config, pkg, progress) {
     const { build } = await this.loadBuild(request, config, pkg);
     const r = request.payload.release;
@@ -169,6 +199,7 @@ class Engine {
       let result;
       if (request.operation === "stage") result = await this.stage(request, config, pkg, progress);
       else if (request.operation === "deploy") result = await this.deploy(request, config, pkg, progress);
+      else if (request.operation === "deploy-batch") result = await this.deployBatch(request, config, progress);
       else if (request.operation === "verify") result = await this.verify(request, config, pkg);
       else if (request.operation === "promote" && this.promote) result = await this.promote(request, config, pkg, progress);
       else throw new Error("Operation is not available in this build");
@@ -188,11 +219,24 @@ class Engine {
         catch (error) { await atomicJson(path.join(this.root, "invalid", file), { error: error.message }); }
       }
       const receipts = [];
-      for (const file of (await listJson(path.join(this.root, "receipts"))).slice(-100)) receipts.push(await readJson(path.join(this.root, "receipts", file)));
+      for (const file of await listJson(path.join(this.root, "receipts"))) {
+        const receipt = await readJson(path.join(this.root, "receipts", file));
+        receipts.push({ id: receipt.id, projectId: receipt.projectId, packageId: receipt.packageId,
+          operation: receipt.operation, status: receipt.status, startedAt: receipt.startedAt,
+          error: receipt.error, phase: receipt.phase,
+          verification: receipt.result?.verification || (receipt.operation === "verify" ? receipt.result : undefined) });
+      }
+      receipts.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+      const projects = [];
+      for (const file of await listJson(path.join(this.root, "projects"))) {
+        const registration = await readJson(path.join(this.root, "projects", file));
+        projects.push({ id: registration.config.id, gameId: registration.config.gameId,
+          packages: registration.config.packages.map(p => ({ id: p.id, name: p.displayName, activation: p.activation || "stage-only" })) });
+      }
       await atomicJson(path.join(this.root, "status.json"), {
         protocolVersion: 1, extensionVersion: require("../../package.json").version,
-        capabilities: ["stage", "deploy", "verify", "rollback", "promote"], observedAt: new Date().toISOString(),
-        ...this.adapter.snapshot(), receipts,
+        capabilities: ["stage", "deploy", "deploy-batch", "verify", "rollback", "promote"], observedAt: new Date().toISOString(),
+        ...this.adapter.snapshot(), projects, receipts: receipts.slice(0, 100),
       });
       });
     } finally { this.busy = false; }
