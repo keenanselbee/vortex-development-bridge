@@ -17,6 +17,12 @@ async function build() {
     bundle: true, platform: "node", target: "node22", legalComments: "eof" });
   await atomicJson(path.join(output, "info.json"), { name: "Vortex Development Bridge", author: metadata.author, version: metadata.version, description: metadata.description });
   for (const file of ["README.md", "CHANGELOG.txt", "NOTICE.txt"]) await fs.copyFile(path.join(repo, file), path.join(output, file));
+  await fs.mkdir(path.join(output, "licenses"));
+  for (const dependency of ["yauzl", "yazl", "buffer-crc32", "pend"]) {
+    await fs.copyFile(path.join(repo, "node_modules", dependency, "LICENSE"), path.join(output, "licenses", dependency + ".txt"));
+  }
+  try { await fs.copyFile(path.join(repo, "LICENSE"), path.join(output, "LICENSE")); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
   await fs.cp(path.join(repo, "examples"), path.join(output, "examples"), { recursive: true });
   await fs.cp(path.join(repo, "schemas"), path.join(output, "schemas"), { recursive: true });
   const archive = path.join(run, `Vortex Development Bridge ${metadata.version}.zip`);

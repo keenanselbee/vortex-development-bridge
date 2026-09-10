@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "vortex-development-bridge",
+  "displayName": "Vortex Development Bridge",
+  "packageName": "vortex-development-bridge",
+  "packageKind": "vortex-extension",
+  "releaseReady": false,
+  "nexus": {
+    "gameDomain": "site",
+    "gameScopedModId": null,
+    "modId": null,
+    "groupId": null,
+    "url": null,
+    "descriptionDirectory": ".",
+    "apiSpecUrl": "https://api.nexusmods.com/openapi.yaml"
+  }
+}

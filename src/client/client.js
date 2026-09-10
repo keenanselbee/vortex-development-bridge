@@ -70,4 +70,19 @@ async function status(root) {
   }
 }
 
-module.exports = { register, registered, stage, submit, status };
+async function promote(root, id, packageId, buildId, receiptPath) {
+  const document = await readJson(path.resolve(receiptPath));
+  const release = document.receipt || document;
+  if (!/^[a-f0-9]{64}$/.test(release.sha256 || "") || !release.archive) throw new Error("Invalid release receipt");
+  const { hash } = require("../protocol/files");
+  if (await hash(release.archive) !== release.sha256) throw new Error("Release archive differs from its receipt");
+  const directory = path.join(root, "releases", release.sha256);
+  await fs.mkdir(directory, { recursive: true });
+  const destination = path.join(directory, "release.zip");
+  try { await fs.copyFile(release.archive, destination, fs.constants.COPYFILE_EXCL); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  if (await hash(destination) !== release.sha256) throw new Error("Queued release archive differs");
+  return submit(root, id, packageId, "promote", { buildId, release: { ...release, archive: undefined } });
+}
+
+module.exports = { register, registered, stage, submit, status, promote };

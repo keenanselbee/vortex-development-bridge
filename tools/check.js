@@ -7,7 +7,7 @@ function visit(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const file = path.join(dir, entry.name);
     if (entry.isDirectory()) visit(file);
-    else if (entry.name.endsWith(".js")) execFileSync(process.execPath, ["--check", file], { stdio: "pipe" });
+    else if (/\.(?:js|mjs)$/.test(entry.name)) execFileSync(process.execPath, ["--check", file], { stdio: "pipe" });
     else if (entry.name.endsWith(".json")) JSON.parse(fs.readFileSync(file, "utf8"));
   }
 }

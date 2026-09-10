@@ -17,7 +17,15 @@
           "displayName": { "type": "string", "minLength": 1 },
           "installation": { "const": "prepared-directory" },
           "modType": { "type": "string" },
-          "activation": { "enum": ["stage-only", "replace-enabled-version"], "default": "stage-only" }
+          "activation": { "enum": ["stage-only", "replace-enabled-version"], "default": "stage-only" },
+          "nexus": {
+            "type": "object", "required": ["gameDomain", "gameScopedModId", "groupId"],
+            "properties": {
+              "gameDomain": { "type": "string" },
+              "gameScopedModId": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+              "groupId": { "type": "string", "pattern": "^[1-9][0-9]*$" }
+            }
+          }
         }
       }
     }

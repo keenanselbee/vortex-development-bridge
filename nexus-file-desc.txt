@@ -1,0 +1,1 @@
+Vortex extension with a bundled command-line client and example project configurations. Development preview; see the description for current requirements and validation status.

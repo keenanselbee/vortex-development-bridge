@@ -44,6 +44,35 @@ function createAdapter(api, vortex) {
       if (!api.getState().persistent?.mods?.[gameId]?.[mod.id]) throw new Error("Vortex did not retain the staged mod entry");
     },
     attributes,
+    async promote(gameId, stagedId, release, archivePath) {
+      context(gameId);
+      if (typeof api.lookupModMeta !== "function") throw new Error("Vortex metadata lookup is unavailable");
+      const results = await api.lookupModMeta({ fileName: "release.zip", filePath: archivePath,
+        fileMD5: release.md5, fileSize: release.size, gameId });
+      const metadata = (results || []).map(x => x.value || x).find(x => x.source === "nexus"
+        && String(x.details?.modId) === String(release.gameScopedModId)
+        && String(x.details?.fileId) === String(release.gameScopedFileId)
+        && String(x.fileMD5).toLowerCase() === release.md5 && Number(x.fileSizeBytes) === release.size);
+      if (!metadata) throw new Error("Vortex cannot yet verify the exact published Nexus archive; retry metadata promotion after indexing");
+      const downloads = api.getState().persistent?.downloads?.files || {};
+      let downloadId = Object.keys(downloads).find(id => String(downloads[id].fileMD5).toLowerCase() === release.md5 && Number(downloads[id].size) === release.size);
+      if (!downloadId) downloadId = await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Vortex archive import timed out; inspect downloads before retrying")), 120000);
+        api.events.emit("import-downloads", [archivePath], ids => {
+          clearTimeout(timer);
+          if (!Array.isArray(ids) || ids.length !== 1) reject(new Error("Vortex did not return one archive ID")); else resolve(ids[0]);
+        }, true);
+      });
+      const download = api.getState().persistent?.downloads?.files?.[downloadId];
+      if (String(download?.fileMD5).toLowerCase() !== release.md5 || Number(download?.size) !== release.size) throw new Error("Imported archive identity has not been verified");
+      await attributes(gameId, stagedId, { source: "nexus", modId: Number(release.gameScopedModId), fileId: Number(release.gameScopedFileId),
+        downloadGame: gameId, fileMD5: release.md5, fileSize: release.size, vdbPublication: "verified", vdbReleaseVersionId: release.versionId });
+      api.store.dispatch(vortex.actions.setModArchiveId(gameId, stagedId, downloadId));
+      if (vortex.actions.setDownloadInstalled) api.store.dispatch(vortex.actions.setDownloadInstalled(downloadId, gameId, stagedId));
+      if (vortex.actions.setDownloadModInfo) api.store.dispatch(vortex.actions.setDownloadModInfo(downloadId, "meta", metadata));
+      if (api.getState().persistent?.mods?.[gameId]?.[stagedId]?.archiveId !== downloadId) throw new Error("Vortex did not retain the release archive link");
+      return { archiveId: downloadId, publication: "verified" };
+    },
     async activate(gameId, profileId, target, siblings) {
       context(gameId, profileId);
       if (typeof vortex.actions.setModEnabled !== "function") throw new Error("Vortex profile activation action is unavailable");

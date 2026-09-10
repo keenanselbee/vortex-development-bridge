@@ -121,4 +121,44 @@ test("changed project registration invalidates queued requests", async t => {
   assert.deepEqual(await fs.readdir(f.staging), []);
 });
 
+test("release promotion requires matching package identity and exact archive payload", async t => {
+  const f = await fixture(t);
+  const { createZip } = require("../src/protocol/archive");
+  const { hash, inventory } = require("../src/protocol/files");
+  f.config.packages[0].nexus = { gameDomain: "example", gameScopedModId: "1", groupId: "2" };
+  await atomicJson(f.configPath, f.config);
+  await client.register(f.bridge, f.configPath);
+  const stage = await client.stage(f.bridge, "demo", "main", f.artifact, "0.1.0");
+  await f.engine.tick();
+  const archive = path.join(f.root, "release.zip");
+  await createZip(f.artifact, archive);
+  const release = { gameDomain: "example", gameScopedModId: "1", groupId: "2", gameScopedFileId: "3", versionId: "v1", version: "0.1.0",
+    archive, sha256: await hash(archive), md5: await hash(archive, "md5"), size: (await fs.stat(archive)).size, files: await inventory(f.artifact) };
+  const file = path.join(f.root, "release.json");
+  await atomicJson(file, release);
+  let promoted = 0;
+  f.engine.adapter.promote = async () => { promoted++; return { publication: "verified" }; };
+  const request = await client.promote(f.bridge, "demo", "main", stage.buildId, file);
+  await f.engine.tick();
+  assert.equal((await receipt(f.bridge, request.id)).status, "completed");
+  assert.equal(promoted, 1);
+  await atomicJson(file, { ...release, groupId: "another-page" });
+  const invalid = await client.promote(f.bridge, "demo", "main", stage.buildId, file);
+  await f.engine.tick();
+  assert.match((await receipt(f.bridge, invalid.id)).error, /Nexus identity/);
+  assert.equal(promoted, 1);
+});
+
+test("a running receipt from a stopped consumer becomes interrupted", async t => {
+  const f = await fixture(t);
+  const staged = await client.stage(f.bridge, "demo", "main", f.artifact, "0.1.0");
+  await f.engine.tick();
+  const file = path.join(f.bridge, "receipts", staged.id + ".json");
+  const original = await readJson(file);
+  await atomicJson(file, { ...original, status: "running" });
+  await new Engine(f.bridge, f.engine.adapter).tick();
+  assert.equal((await receipt(f.bridge, staged.id)).status, "interrupted");
+  assert.equal(f.deployments(), 0);
+});
+
 module.exports = { fixture };

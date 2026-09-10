@@ -5,6 +5,7 @@ const path = require("node:path");
 const { readJson, atomicJson, inventory, differences, fingerprint, inside, hash, lock } = require("../protocol/files");
 const { validateProject, VERSION } = require("../protocol/config");
 const { validateRequest } = require("../protocol/queue");
+const { inspectZip } = require("../protocol/archive");
 
 function buildKey(value) {
   if (!/^[a-f0-9]{24}$/.test(value || "")) throw new Error("Invalid build ID");
@@ -129,6 +130,21 @@ class Engine {
       note: "Different live bytes may be another mod's override; this check does not infer the winner or prove gameplay." };
   }
 
+  async promote(request, config, pkg, progress) {
+    const { build } = await this.loadBuild(request, config, pkg);
+    const r = request.payload.release;
+    if (!r || !/^[a-f0-9]{64}$/.test(r.sha256 || "") || !/^[a-f0-9]{32}$/.test(r.md5 || "")) throw new Error("Invalid release fingerprints");
+    if (!pkg.nexus || String(pkg.nexus.gameScopedModId) !== String(r.gameScopedModId)
+        || String(pkg.nexus.groupId) !== String(r.groupId) || pkg.nexus.gameDomain !== r.gameDomain) throw new Error("Release does not match the configured package's Nexus identity");
+    for (const id of [r.gameScopedModId, r.gameScopedFileId]) if (!Number.isSafeInteger(Number(id)) || Number(id) <= 0) throw new Error("Invalid game-scoped Nexus ID");
+    if (r.version !== build.version) throw new Error("Published and staged versions differ");
+    const archive = path.join(this.root, "releases", r.sha256, "release.zip");
+    if ((await fs.stat(archive)).size !== r.size || await hash(archive) !== r.sha256 || await hash(archive, "md5") !== r.md5) throw new Error("Release archive fingerprints differ");
+    if (differences(build.files, await inspectZip(archive)).length) throw new Error("Published archive does not match the staged payload layout");
+    await progress({ phase: "promoting-metadata" });
+    return this.adapter.promote(config.gameId, build.stagedId, r, archive);
+  }
+
   async process(file) {
     const request = await readJson(file);
     const expectedName = request.id + ".json";
@@ -175,7 +191,7 @@ class Engine {
       for (const file of (await listJson(path.join(this.root, "receipts"))).slice(-100)) receipts.push(await readJson(path.join(this.root, "receipts", file)));
       await atomicJson(path.join(this.root, "status.json"), {
         protocolVersion: 1, extensionVersion: require("../../package.json").version,
-        capabilities: ["stage", "deploy", "verify", "rollback"], observedAt: new Date().toISOString(),
+        capabilities: ["stage", "deploy", "verify", "rollback", "promote"], observedAt: new Date().toISOString(),
         ...this.adapter.snapshot(), receipts,
       });
       });

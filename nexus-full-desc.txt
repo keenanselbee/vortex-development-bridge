@@ -1,0 +1,30 @@
+[center][size=6][b]Vortex Development Bridge[/b][/size]
+[i]Bring your mod development workflow into Vortex.[/i][/center]
+
+Vortex Development Bridge connects repository scripts and command-line tools to Vortex. Register a project, stage a prepared build, activate a retained version and inspect the outcome from one consistent workflow.
+
+[size=4][b]Development preview[/b][/size]
+This version is under development. Automated checks cover isolated filesystem operations and a simulated Vortex API. Live installation, upgrade and game-specific deployment qualification are pending. The project is not yet cleared for public release.
+
+[size=4][b]Features[/b][/size]
+[list]
+[*]A Development Bridge page inside Vortex.
+[*]A command-line client for repository scripts and development agents.
+[*]Project and package identities that support multiple games and separate optional packages.
+[*]Prepared builds verified by file paths, sizes and SHA-256 hashes.
+[*]Retained build versions for explicit activation and rollback.
+[*]Stage-only operation by default, with configurable updates to an enabled development version.
+[*]Expiring requests and operation receipts that distinguish completed, failed and interrupted work.
+[/list]
+
+[size=4][b]Installation and requirements[/b][/size]
+Install the release ZIP through Vortex's Extensions screen, enable it and restart Vortex. The extension runs inside Vortex. Using the separate command-line client requires Node.js 22 or newer.
+
+[size=4][b]Getting started[/b][/size]
+Copy a supplied project example into your repository and configure its game, packages and installation layout. Register the configuration through the Development Bridge page or the client. Stage a directory already arranged in its final Vortex staging layout, then choose the intended active profile before deployment.
+
+[size=4][b]Compatibility[/b][/size]
+The bridge uses the game's existing Vortex support and mod types. Grailwright and Sovereign configurations are provided as integration examples; their production workflows are not migrated automatically. Game-specific build tools, archive installers and gameplay tests remain part of the project's own workflow.
+
+[size=4][b]Troubleshooting[/b][/size]
+Use the client doctor/status commands and inspect the operation receipt. Expired, failed and interrupted operations are not automatically replayed. Deployment verification compares expected files; differing live bytes can indicate another mod's override. Successful deployment does not establish gameplay correctness.

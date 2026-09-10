@@ -1,0 +1,5 @@
+TargetVersion=0.1.0
+BaselineVersion=none
+Introduced project registration and verified staging for prepared mod builds.
+Added explicit profile deployment and restoration of retained build versions.
+Added a Vortex page, bundled client and example project configurations.

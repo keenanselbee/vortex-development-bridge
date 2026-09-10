@@ -11,6 +11,7 @@ const HELP = `Vortex Development Bridge
   vdb stage --project <id> --package <id> --artifact <directory> --version <version> [--profile <id>]
   vdb deploy | rollback --project <id> --package <id> --build <id> --profile <id>
   vdb verify --project <id> --package <id> --build <id> [--profile <id>]
+  vdb promote --project <id> --package <id> --build <id> --receipt <release-journal.json>
   vdb receipt --request <id>
   vdb wait --request <id> [--seconds 30]
 All commands accept --bridge <queue-directory> and --json.
@@ -19,7 +20,7 @@ Rollback explicitly activates a retained build; it never deletes versions.`;
 
 function parse(argv) {
   const args = { command: argv[0] || "help" };
-  const known = new Set(["config", "project", "package", "artifact", "version", "profile", "build", "request", "seconds", "bridge", "json"]);
+  const known = new Set(["config", "project", "package", "artifact", "version", "profile", "build", "request", "receipt", "seconds", "bridge", "json"]);
   for (let i = 1; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, "");
     if (!argv[i].startsWith("--") || !known.has(key)) throw new Error(`Unknown argument: ${argv[i]}`);
@@ -44,6 +45,9 @@ async function main(argv) {
     case "stage":
       required("project", "package", "artifact", "version");
       return client.stage(root, args.project, args.package, args.artifact, args.version, args.profile);
+    case "promote":
+      required("project", "package", "build", "receipt");
+      return client.promote(root, args.project, args.package, args.build, args.receipt);
     case "deploy": case "rollback": case "verify":
       required("project", "package", "build");
       if (args.command !== "verify") required("profile");
