@@ -13,8 +13,10 @@ This version is under development. Automated checks cover isolated filesystem op
 [*]Project and package identities that support multiple games and separate optional packages.
 [*]Prepared builds verified by file paths, sizes and SHA-256 hashes.
 [*]Retained build versions for explicit activation and rollback.
+[*]Coordinated package activation with one deployment after all selected builds pass verification.
 [*]Stage-only operation by default, with configurable updates to an enabled development version.
 [*]Expiring requests and operation receipts that distinguish completed, failed and interrupted work.
+[*]Repository publishing tools with authored Nexus descriptions, release journals and exact-archive metadata promotion.
 [/list]
 
 [size=4][b]Installation and requirements[/b][/size]
