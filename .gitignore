@@ -1,1 +1,6 @@
 Vortex Development Bridge.code-workspace
+node_modules/
+dist/
+.codex-temp/
+*.local.json
+.env*
