@@ -106,3 +106,18 @@ test("single-part upload binds content MD5 and never passes API credentials to s
   assert.equal(await upload(f.archive, async () => {}, invoke, send), "upload-id");
   assert.match(records[0].body.md5, /^[a-f0-9]{32}$/);
 });
+
+test("extension preparation rejects a build made from older source", async t => {
+  const f = await fixture(t);
+  const { hash, inventory } = require("../src/protocol/files");
+  const manifest = await readJson(path.join(f.repo, "mod.json"));
+  await atomicJson(path.join(f.repo, "mod.json"), { ...manifest, packageKind: "vortex-extension" });
+  await atomicJson(path.join(f.repo, "payload/info.json"), { name: "Example", version: "0.1.0" });
+  const archive = path.join(f.repo, "Extension.zip");
+  const files = await createZip(path.join(f.repo, "payload"), archive);
+  await fs.writeFile(path.join(f.repo, "source.js"), "old source");
+  await atomicJson(path.join(f.repo, "build-receipt.json"), { archive, version: "0.1.0", files, sha256: await hash(archive), sourceHashes: { "source.js": await hash(path.join(f.repo, "source.js")) } });
+  assert.equal((await prepare(f.repo, archive, f.invoke, { offline: true })).status, "local-validated");
+  await fs.writeFile(path.join(f.repo, "source.js"), "new source");
+  await assert.rejects(prepare(f.repo, archive, f.invoke, { offline: true }), /Build is stale/);
+});

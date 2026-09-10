@@ -45,6 +45,7 @@ async function createZip(source, destination) {
   if (!before.length) throw new Error("Cannot package an empty directory");
   await fsp.mkdir(path.dirname(destination), { recursive: true });
   const zip = new yazl.ZipFile();
+  zip.on("error", error => zip.outputStream.destroy(error));
   const finished = pipeline(zip.outputStream, fs.createWriteStream(destination, { flags: "wx" }));
   try {
     for (const file of before) zip.addFile(inside(source, file.path), file.path, { mtime: new Date("2000-01-01T00:00:00Z"), mode: 0o100644 });

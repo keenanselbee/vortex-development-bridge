@@ -58,6 +58,12 @@ async function prepare(repo, archive, invoke = api, options = {}) {
     if (!files.some(x => x.path === "index.js") || !files.some(x => x.path === "info.json")) throw new Error("Extension ZIP needs index.js and info.json at its root");
     const build = await readJson(path.join(path.dirname(archive), "build-receipt.json"));
     if (build.archive !== archive || build.version !== state.pkg.version || build.sha256 !== await hash(archive) || differences(build.files, files).length) throw new Error("Extension archive does not match its build receipt");
+    if (!build.sourceHashes) throw new Error("Build receipt lacks source provenance; rebuild the extension");
+    for (const [file, expected] of Object.entries(build.sourceHashes)) {
+      const source = inside(state.repo, file);
+      if (await hash(source) !== expected) throw new Error(`Build is stale: ${file}; rebuild before release preparation`);
+      state.sourceHashes[source] = expected;
+    }
   }
   const base = { ...state, archive, files, sha256: await hash(archive), md5: await hash(archive, "md5"), size: (await fs.stat(archive)).size, version: state.pkg.version };
   if (options.offline) return { ...base, status: "local-validated", remote: "not-checked" };

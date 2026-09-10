@@ -31,7 +31,14 @@ async function main(argv) {
     const rows = current.active.map(v => ({ version: v.version, id: v.id, category: v.category, localVersion: state.pkg.version }));
     return { versions: rows, descriptions: "Use description review for fresh browser comparison", fileGroupConfigured: !!state.manifest.nexus.groupId };
   }
-  if (command === "catalog") return api("GET", "/vortex/extensions", undefined, { public: true });
+  if (command === "catalog") {
+    const state = await local(repo);
+    const catalog = await api("GET", "/vortex/extensions", undefined, { public: true });
+    const id = state.manifest.nexus.gameScopedModId;
+    const matches = (catalog.extensions || []).filter(x => id && String(x.mod_id) === String(id));
+    return { pageConfigured: !!id, listed: matches.length > 0, localVersion: state.pkg.version,
+      entries: matches, observedAt: new Date().toISOString() };
+  }
   if (command === "descriptions") return describe(repo, args.backup ? args.save ? "revert-save" : "revert-review" : args.login ? "login" : args.save ? "save" : "review", args);
   if (command === "prepare") {
     const archive = args.archive || (await readJson(path.join(repo, "dist/latest.json"))).archive;

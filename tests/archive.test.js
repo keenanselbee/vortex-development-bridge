@@ -35,3 +35,21 @@ test("built extension has root metadata and a working standalone client", async 
   const help = execFileSync(process.execPath, [path.join(latest.run, "extension/client/vdb.cjs"), "help"], { encoding: "utf8" });
   assert.match(help, /Vortex Development Bridge/);
 });
+
+test("bundled extension loads and registers its page without a local Node dependency tree", async () => {
+  const vm = require("node:vm");
+  let latest;
+  try { latest = await readJson(path.resolve("dist/latest.json")); }
+  catch (error) { if (error.code === "ENOENT") return; throw error; }
+  const module = { exports: {} };
+  const api = { getVortexPath: () => path.resolve(".codex-temp/fake-vortex") };
+  const vortex = { util: {}, MainPage: function MainPage() {} };
+  const context = { module, exports: module.exports, process, console, Buffer, setTimeout, clearTimeout, setInterval, clearInterval,
+    require: name => name === "vortex-api" ? vortex : name === "react" ? { Component: class {}, createElement() {} } : require(name) };
+  vm.runInNewContext(await fs.readFile(path.join(latest.run, "extension/index.js"), "utf8"), context);
+  let registered, started;
+  const result = module.exports.default({ api, registerMainPage: (...args) => { registered = args; }, once: callback => { started = callback; } });
+  assert.equal(result, true);
+  assert.equal(registered[3].id, "vortex-development-bridge");
+  assert.equal(typeof started, "function");
+});
