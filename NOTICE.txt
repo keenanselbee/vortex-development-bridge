@@ -1,0 +1,10 @@
+Vortex Development Bridge
+Copyright (c) 2026 Keenan Selbee
+
+Public licensing has not yet been selected. This development package is not cleared
+for public release. Vortex and Nexus Mods are third-party products; this project is
+not an official Nexus Mods product.
+
+The workflow originates from the author's Grailwright Nexus Metadata extension.
+Vortex integration follows the public Vortex API. Dependency license texts are
+included in bundled output or accompanying dependency notices before publication.

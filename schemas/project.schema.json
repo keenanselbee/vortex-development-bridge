@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VDB project configuration",
+  "type": "object",
+  "required": ["schemaVersion", "id", "gameId", "packages"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,79}$" },
+    "gameId": { "type": "string", "minLength": 1 },
+    "packages": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "displayName", "installation"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,79}$" },
+          "displayName": { "type": "string", "minLength": 1 },
+          "installation": { "const": "prepared-directory" },
+          "modType": { "type": "string" },
+          "activation": { "enum": ["stage-only", "replace-enabled-version"], "default": "stage-only" }
+        }
+      }
+    }
+  }
+}

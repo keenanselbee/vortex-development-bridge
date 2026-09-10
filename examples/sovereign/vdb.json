@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "sovereign",
+  "gameId": "eldenring",
+  "packages": [
+    { "id": "main", "displayName": "Sovereign", "installation": "prepared-directory", "activation": "stage-only" },
+    { "id": "textures", "displayName": "Sovereign - Textures", "installation": "prepared-directory", "activation": "stage-only" }
+  ]
+}

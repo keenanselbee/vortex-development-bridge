@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "grailwright",
+  "gameId": "taintedgrailthefallofavalon",
+  "packages": [
+    { "id": "example-mod", "displayName": "Grailwright Example Mod", "installation": "prepared-directory", "activation": "stage-only" }
+  ]
+}

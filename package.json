@@ -6,11 +6,22 @@
   "author": "Keenan Selbee",
   "license": "UNLICENSED",
   "type": "commonjs",
-  "bin": { "vdb": "src/client/cli.js" },
-  "engines": { "node": ">=22" },
+  "bin": {
+    "vdb": "src/client/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "node --test tests/*.test.js",
     "build": "node tools/build.js",
     "check": "node tools/check.js"
+  },
+  "dependencies": {
+    "yauzl": "3.4.0",
+    "yazl": "3.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

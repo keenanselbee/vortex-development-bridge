@@ -1,0 +1,5 @@
+0.1.0
+- Introduces project registration, immutable prepared builds, explicit profile deployment, verification and retained-version rollback.
+- Adds expiring local requests and durable operation receipts.
+- Adds a Vortex page and command-line client.
+- Development release: live Vortex acceptance and public publication are pending.
