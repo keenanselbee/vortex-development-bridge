@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { inside, inventory, differences, fingerprint } = require("../src/protocol/files");
+const { inside, readJson, atomicJson, inventory, differences, fingerprint } = require("../src/protocol/files");
 const { validateProject } = require("../src/protocol/config");
 const { makeRequest, enqueue, validateRequest, receipt } = require("../src/protocol/queue");
 
@@ -16,6 +16,18 @@ test("CLI exit codes distinguish deployment differences from completed verificat
   assert.equal(outcomeCode({ status: "completed", result: { verification: [{ deployed: "verified" }, { deployed: "differences" }] } }), 3);
   assert.equal(outcomeCode({ status: "completed", result: { deployed: "verified", enabled: true } }), 0);
   assert.equal(outcomeCode({ status: "pending" }), 2);
+});
+test("CLI accepts an exact project/package reconcile request", () => {
+  const { parse } = require("../src/client/cli");
+  assert.deepEqual(parse(["reconcile", "--project", "demo", "--package", "main"]),
+    { command: "reconcile", project: "demo", package: "main" });
+});
+test("CLI accepts explicit legacy publication dry-run and apply commands", () => {
+  const { parse } = require("../src/client/cli");
+  const args = ["--project", "demo", "--package", "main", "--staged-id", "Legacy Demo 0.1.0", "--migration", "migration.json"];
+  assert.deepEqual(parse(["legacy-publication-dry-run", ...args]), { command: "legacy-publication-dry-run", project: "demo", package: "main",
+    "staged-id": "Legacy Demo 0.1.0", migration: "migration.json" });
+  assert.equal(parse(["legacy-publication-apply", ...args]).command, "legacy-publication-apply");
 });
 async function scratch(t) {
   const root = path.resolve(".codex-temp/tests");
@@ -31,6 +43,8 @@ test("duplicate packages and unsupported installation modes are rejected", () =>
   assert.equal(validateProject(config), config);
   assert.throws(() => validateProject({ ...config, packages: [...config.packages, ...config.packages] }));
   assert.throws(() => validateProject({ ...config, packages: [{ ...config.packages[0], installation: "guess" }] }));
+  assert.throws(() => validateProject({ ...config, packages: [{ ...config.packages[0], nexus: { gameDomain: "demo", gameScopedModId: "0", groupId: "2" } }] }));
+  assert.throws(() => validateProject({ ...config, packages: [{ ...config.packages[0], logicalFileName: "   " }] }), /logicalFileName/);
 });
 test("inventory detects changes and excludes no hidden payloads", async t => {
   const root = await scratch(t);
@@ -38,6 +52,29 @@ test("inventory detects changes and excludes no hidden payloads", async t => {
   const before = await inventory(root);
   await fs.writeFile(path.join(root, ".hidden"), "after");
   assert.deepEqual(differences(before, await inventory(root)), [{ path: ".hidden", state: "changed" }]);
+});
+test("atomic JSON replacement retries transient Windows rename contention", async t => {
+  const root = await scratch(t);
+  const file = path.join(root, "receipt.json");
+  await atomicJson(file, { state: "before" });
+  const rename = fs.rename;
+  let attempts = 0;
+  fs.rename = async (...args) => {
+    attempts++;
+    if (attempts < 3) {
+      const error = new Error("simulated Windows file contention");
+      error.code = "EPERM";
+      throw error;
+    }
+    return rename(...args);
+  };
+  try {
+    await atomicJson(file, { state: "after" });
+  } finally {
+    fs.rename = rename;
+  }
+  assert.equal(attempts, 3);
+  assert.deepEqual(await readJson(file), { state: "after" });
 });
 test("requests expire and repeated IDs cannot change meaning", async t => {
   const root = await scratch(t);

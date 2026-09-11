@@ -2,4 +2,12 @@
 - Introduces project registration, immutable prepared builds, explicit profile deployment, verification and retained-version rollback.
 - Adds expiring local requests and durable operation receipts.
 - Adds a Vortex page and command-line client.
-- Development release: live Vortex acceptance and public publication are pending.
+- Defers runtime API access until Vortex's supported once lifecycle so the extension loads on Vortex 2.6.3.
+- Allows stage-only packages to use another managed game's configured staging path without switching the active game or profile.
+- Separates canonical Vortex logical filenames from private project/package/build ownership and adds guarded reconciliation for retained VDB variants.
+- Adds locally signed, receipt-backed dry-run and apply operations for exact legacy Nexus publication metadata, including a fail-closed exception for wholly unattributed stages whose IDs, paths, archives, and payloads all match.
+- Retains the original archive filename, verifies exact Nexus metadata during dry-run, and permits a signed wholly-unattributed migration only when Vortex returns one exact MD5-and-size archive with no conflicting attribution.
+- Waits for Vortex's imported download record to retain the expected fingerprint before linking it or changing mod metadata.
+- Retries transient Windows receipt-file rename contention without replaying the operation.
+- Imports bridge-owned releases under content-addressed filenames so retained Vortex downloads never collide as `release.zip`.
+- Development release: live installation, Grailwright BepInEx staging, canonical grouping, explicit Test-profile activation/deployment/verification/rollback, and guarded legacy migration are qualified; Sovereign layouts and public publication remain pending.

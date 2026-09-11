@@ -13,6 +13,9 @@ const HELP = `Vortex Development Bridge
   vdb deploy-batch --project <id> --builds <selection.json> --profile <id>
   vdb verify --project <id> --package <id> --build <id> [--profile <id>]
   vdb promote --project <id> --package <id> --build <id> --receipt <release-journal.json>
+  vdb reconcile --project <id> --package <id>
+  vdb legacy-publication-dry-run --project <id> --package <id> --staged-id <id> --migration <migration-receipt.json>
+  vdb legacy-publication-apply --project <id> --package <id> --staged-id <id> --migration <migration-receipt.json>
   vdb receipt --request <id>
   vdb wait --request <id> [--seconds 30]
 All commands accept --bridge <queue-directory> and --json.
@@ -21,7 +24,7 @@ Rollback explicitly activates a retained build; it never deletes versions.`;
 
 function parse(argv) {
   const args = { command: argv[0] || "help" };
-  const known = new Set(["config", "project", "package", "artifact", "version", "profile", "build", "builds", "request", "receipt", "seconds", "bridge", "json"]);
+  const known = new Set(["config", "project", "package", "artifact", "version", "profile", "build", "builds", "request", "receipt", "migration", "staged-id", "seconds", "bridge", "json"]);
   for (let i = 1; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, "");
     if (!argv[i].startsWith("--") || !known.has(key)) throw new Error(`Unknown argument: ${argv[i]}`);
@@ -38,11 +41,11 @@ async function main(argv) {
   const args = parse(argv);
   if (["help", "--help", "-h"].includes(args.command)) return HELP;
   const root = bridgeRoot(args.bridge);
-  if (!args.project && ["stage", "deploy", "deploy-batch", "rollback", "verify", "promote"].includes(args.command)) {
+  if (!args.project && ["stage", "deploy", "deploy-batch", "rollback", "verify", "promote", "reconcile", "legacy-publication-dry-run", "legacy-publication-apply"].includes(args.command)) {
     try { args.project = (await require("../protocol/config").project(args.config || "vdb.json")).config.id; }
     catch (error) { if (error.code !== "ENOENT") throw error; }
   }
-  if (args.project && !args.package && ["stage", "deploy", "rollback", "verify", "promote"].includes(args.command)) {
+  if (args.project && !args.package && ["stage", "deploy", "rollback", "verify", "promote", "reconcile", "legacy-publication-dry-run", "legacy-publication-apply"].includes(args.command)) {
     const registration = await client.registered(root, args.project);
     if (registration.config.packages.length === 1) args.package = registration.config.packages[0].id;
   }
@@ -63,6 +66,14 @@ async function main(argv) {
     case "promote":
       required("project", "package", "build", "receipt");
       return client.promote(root, args.project, args.package, args.build, args.receipt);
+    case "reconcile":
+      required("project", "package");
+      return client.reconcile(root, args.project, args.package);
+    case "legacy-publication-dry-run":
+    case "legacy-publication-apply":
+      required("project", "package", "staged-id", "migration");
+      return client.legacyPublicationMigration(root, args.project, args.package, args["staged-id"], args.migration,
+        args.command === "legacy-publication-apply");
     case "deploy-batch": {
       required("project", "builds", "profile");
       const builds = await require("../protocol/files").readJson(args.builds);

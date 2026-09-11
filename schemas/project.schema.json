@@ -15,6 +15,7 @@
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,79}$" },
           "displayName": { "type": "string", "minLength": 1 },
+          "logicalFileName": { "type": "string", "minLength": 1 },
           "installation": { "const": "prepared-directory" },
           "modType": { "type": "string" },
           "activation": { "enum": ["stage-only", "replace-enabled-version"], "default": "stage-only" },

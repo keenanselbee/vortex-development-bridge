@@ -6,14 +6,16 @@ const { createAdapter } = require("./adapter");
 const { BridgePage } = require("./page");
 
 function main(context) {
-  const resolver = context.api.getVortexPath || vortex.util.getVortexPath;
-  if (typeof resolver !== "function") throw new Error("Vortex does not expose its user-data directory");
-  const root = path.join(resolver.call(context.api, "userData"), "vortex-development-bridge");
-  const engine = new Engine(root, createAdapter(context.api, vortex));
+  let root;
+  let engine;
   context.registerMainPage("workshop", "Development Bridge", BridgePage, {
     id: "vortex-development-bridge", group: "global", props: () => ({ root, engine }),
   });
   context.once(() => {
+    const resolver = context.api.getVortexPath || vortex.util.getVortexPath;
+    if (typeof resolver !== "function") throw new Error("Vortex does not expose its user-data directory");
+    root = path.join(resolver.call(context.api, "userData"), "vortex-development-bridge");
+    engine = new Engine(root, createAdapter(context.api, vortex));
     let lastError;
     const tick = async () => {
       try { await engine.tick(); lastError = undefined; }

@@ -22,7 +22,18 @@ async function atomicJson(file, data) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(temporary, JSON.stringify(data, null, 2) + "\n", { flag: "wx" });
-  try { await fs.rename(temporary, file); }
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await fs.rename(temporary, file);
+        break;
+      } catch (error) {
+        const transient = ["EACCES", "EBUSY", "EPERM"].includes(error.code);
+        if (!transient || attempt >= 19) throw error;
+        await new Promise(resolve => setTimeout(resolve, Math.min(25 * (attempt + 1), 250)));
+      }
+    }
+  }
   finally { await fs.rm(temporary, { force: true }); }
 }
 
@@ -59,6 +70,11 @@ function fingerprint(value) {
   return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function releaseArchiveName(sha256) {
+  if (!/^[a-f0-9]{64}$/.test(sha256 || "")) throw new Error("Invalid release SHA-256");
+  return `vdb-${sha256}.zip`;
+}
+
 function differences(expected, actual) {
   const before = new Map(expected.map(x => [x.path, x]));
   const after = new Map(actual.map(x => [x.path, x]));
@@ -86,4 +102,4 @@ async function lock(root, action) {
   }
 }
 
-module.exports = { inside, readJson, atomicJson, hash, inventory, fingerprint, differences, lock };
+module.exports = { inside, readJson, atomicJson, hash, inventory, fingerprint, differences, releaseArchiveName, lock };

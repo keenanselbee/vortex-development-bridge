@@ -76,3 +76,7 @@ record. No API key is needed in the extension. Version labels alone are insuffic
 Version 1 expects archive paths to equal prepared staging paths; installer transforms
 require a future explicit mapping adapter. Changing project configuration requires
 staging under the new configuration fingerprint before promotion.
+Promotion may be submitted before the stage consumer finishes. Missing build state,
+an inactive target game, and not-yet-indexed exact Nexus metadata remain pending and
+retry automatically until the request expires. Failures after an import may have
+started are terminal and require inspection before a fresh request.

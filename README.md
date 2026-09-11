@@ -2,8 +2,10 @@ Vortex Development Bridge
 =========================
 
 Connect mod build tools to Vortex through explicit, recorded operations. Version
-0.1.0 is a development preview. Live Vortex acceptance and Nexus publication are
-not yet complete.
+0.1.0 is a development preview. Live installation, Grailwright BepInEx staging,
+canonical grouping, and explicit Test-profile activation, deployment, verification,
+rollback, and guarded legacy publication migration are qualified. Sovereign layouts
+and Nexus publication are not yet complete.
 
 The extension runs inside Vortex. The command-line client requires Node.js 22 or
 newer. Project build tools produce a prepared directory in the final Vortex staging
@@ -29,10 +31,13 @@ Receipts distinguish queue acceptance, completion, failure and interruption.
 Development
 -----------
 
-Run `npm ci`, `npm test`, `npm run check`, and `npm run build`. Generated output goes
-to ignored `dist/`; scratch and local test data belong in `.codex-temp/`.
+Run `npm ci` when dependencies change, then use `tools/Build-Extension.ps1` for the
+ordered source check, build, and complete test pass. Generated output goes to ignored
+`dist/`; scratch and local test data belong in `.codex-temp/`.
 
 See [the workflow](docs/workflow.md), [the protocol](docs/protocol.md),
 [Nexus publishing](docs/nexus-workflow.md), and [manual acceptance](docs/test-matrix.md).
 No Nexus credentials are required for local use. The installation preview command is
-`tools/Install-DevExtension.ps1`; use Vortex's Extensions screen for normal upgrades.
+`tools/Install-DevExtension.ps1`. While Vortex is closed, pass `-Install` for a new
+development installation or `-Install -UpdateExisting` for a backed-up in-place
+development update. Use Vortex's Extensions screen for normal packaged upgrades.

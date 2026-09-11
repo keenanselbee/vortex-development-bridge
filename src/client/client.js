@@ -5,6 +5,7 @@ const path = require("node:path");
 const { project, VERSION } = require("../protocol/config");
 const { atomicJson, readJson, inventory, fingerprint, differences, inside, lock } = require("../protocol/files");
 const { enqueue, makeRequest } = require("../protocol/queue");
+const { receipt: migrationReceipt, trust: trustMigration } = require("../protocol/migration");
 
 async function register(root, file) {
   const registration = await project(file);
@@ -74,15 +75,51 @@ async function promote(root, id, packageId, buildId, receiptPath) {
   const document = await readJson(path.resolve(receiptPath));
   const release = document.receipt || document;
   if (!/^[a-f0-9]{64}$/.test(release.sha256 || "") || !release.archive) throw new Error("Invalid release receipt");
-  const { hash } = require("../protocol/files");
-  if (await hash(release.archive) !== release.sha256) throw new Error("Release archive differs from its receipt");
-  const directory = path.join(root, "releases", release.sha256);
-  await fs.mkdir(directory, { recursive: true });
-  const destination = path.join(directory, "release.zip");
-  try { await fs.copyFile(release.archive, destination, fs.constants.COPYFILE_EXCL); }
-  catch (error) { if (error.code !== "EEXIST") throw error; }
-  if (await hash(destination) !== release.sha256) throw new Error("Queued release archive differs");
+  await storeRelease(root, release.archive, release);
   return submit(root, id, packageId, "promote", { buildId, release: { ...release, archive: undefined } });
 }
 
-module.exports = { register, registered, stage, submit, status, promote };
+async function storeRelease(root, sourcePath, release) {
+  const { hash, releaseArchiveName } = require("../protocol/files");
+  const source = path.resolve(sourcePath);
+  if ((await fs.stat(source)).size !== Number(release.size) || await hash(source) !== release.sha256 || await hash(source, "md5") !== release.md5) {
+    throw new Error("Release archive differs from its receipt");
+  }
+  const directory = path.join(root, "releases", release.sha256);
+  await fs.mkdir(directory, { recursive: true });
+  const destination = path.join(directory, releaseArchiveName(release.sha256));
+  try { await fs.copyFile(source, destination, fs.constants.COPYFILE_EXCL); }
+  catch (error) { if (error.code !== "EEXIST") throw error; }
+  if ((await fs.stat(destination)).size !== Number(release.size) || await hash(destination) !== release.sha256 || await hash(destination, "md5") !== release.md5) {
+    throw new Error("Queued release archive differs");
+  }
+  return destination;
+}
+
+async function legacyPublicationMigration(root, id, packageId, stagedId, migrationPath, apply) {
+  const registration = await registered(root, id);
+  const pkg = registration.config.packages.find(item => item.id === packageId);
+  if (!pkg) throw new Error("Package is not registered");
+  const source = await readJson(path.resolve(migrationPath));
+  const migration = migrationReceipt(source);
+  if (migration.projectId !== id || migration.packageId !== packageId || migration.stagedId !== stagedId) {
+    throw new Error("Migration receipt does not match the requested project, package and staged ID");
+  }
+  if (migration.gameId !== registration.config.gameId || !pkg.nexus
+      || migration.nexus.gameDomain !== pkg.nexus.gameDomain
+      || migration.nexus.gameScopedModId !== String(pkg.nexus.gameScopedModId)
+      || migration.nexus.groupId !== String(pkg.nexus.groupId)) {
+    throw new Error("Migration receipt does not match the registered package Nexus identity");
+  }
+  await storeRelease(root, migration.archive.path, migration.archive);
+  const trusted = await trustMigration(root, source);
+  return submit(root, id, packageId, apply ? "legacy-publication-apply" : "legacy-publication-dry-run", {
+    stagedId, migrationReceiptId: trusted.id, migrationSignature: trusted.signature,
+  });
+}
+
+function reconcile(root, id, packageId) {
+  return submit(root, id, packageId, "reconcile", {});
+}
+
+module.exports = { register, registered, stage, submit, status, promote, reconcile, legacyPublicationMigration };
