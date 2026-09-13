@@ -13,9 +13,7 @@ Command-line example
 ```text
 node src/client/cli.js register --config examples/minimal/vdb.json
 node src/client/cli.js doctor
-node src/client/cli.js stage --project example-project --package main --artifact <prepared-directory> --version 0.1.0
-node src/client/cli.js wait --request <returned-request-id>
-node src/client/cli.js deploy --project example-project --package main --build <returned-build-id> --profile <profile-id>
+node src/client/cli.js finish --project example-project --package main --artifact <prepared-directory> --version 0.1.1
 node src/client/cli.js wait --request <returned-request-id>
 ```
 
@@ -25,6 +23,15 @@ src/client/cli.js. Registration and staging are also available on the Vortex pag
 The client infers the project from a vdb.json in the current directory and infers
 the package when the registered project has exactly one package. Explicit arguments
 take precedence. STATUS can be narrowed with --project.
+
+Finalization defaults to all profiles for the game, preserving enabled/disabled
+states. Add `--profile` to narrow it. Enabled versions deploy when active and safe;
+disabled versions update without deployment; absent packages remain absent. Add `--stage-only` and
+omit `--profile` to stage without activation or live-file changes. The page exposes
+both choices. Use `finish-batch` to prepare several final packages and deploy once.
+See [finalization](finalization.md) for examples and durable waiting semantics.
+The existing protocol-1 `stage` and explicit `deploy` commands retain their legacy
+behavior; their expiring requests are not the durable finalization workflow.
 
 Nexus and release
 -----------------
@@ -36,4 +43,5 @@ archive, not just a successful process exit. Never publish from a stale build re
 Use [manual acceptance](test-matrix.md) for observed Vortex results. The examples
 are configuration templates, not evidence that a game's production integration has
 passed. Public release is blocked until licensing, Nexus identities and manual
-acceptance are resolved.
+acceptance are resolved. Follow the [public release checklist](public-release-checklist.md)
+for the ordered remaining steps.
