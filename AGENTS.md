@@ -33,7 +33,10 @@ Repository-Specific Notes
   scope. Repository implementation alone does not authorize changing Vortex.
 - Grailwright and Sovereign are integration references. Changes to those
   repositories require explicit scope in the current request.
-- Inputs must name registered project/package identities and explicit profiles.
+- Inputs must name registered project/package identities. Finish defaults to all
+  profiles for that game; explicit profile scope and stage-only remain supported.
+  Preserve enabled/disabled state; never enable absent or disabled packages during
+  automatic finalization. Explicit deploy/rollback still require a named profile.
   The extension must never execute arbitrary shell commands from queued requests.
 - Keep file-group IDs, global mod IDs and game-scoped IDs distinct. Match release
   archive contents before promotion and obtain published identity through Vortex.

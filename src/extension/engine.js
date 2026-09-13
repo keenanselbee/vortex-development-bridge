@@ -6,7 +6,6 @@ const { readJson, atomicJson, inventory, differences, fingerprint, inside, hash,
 const { logicalFileName, validateProject, VERSION } = require("../protocol/config");
 const { validateRequest } = require("../protocol/queue");
 const { inspectZip } = require("../protocol/archive");
-const { trusted: trustedMigration } = require("../protocol/migration");
 
 function buildKey(value) {
   if (!/^[a-f0-9]{24}$/.test(value || "")) throw new Error("Invalid build ID");
@@ -23,7 +22,7 @@ function isOwnedBy(attributes, config, pkg) {
   return attributes?.vdbProjectId === config.id && attributes?.vdbPackageId === pkg.id;
 }
 
-function managedSiblings(context, config, pkg, stagedId) {
+function managedSiblings(context, config, pkg, stagedId, includeDisabled = false) {
   const canonical = logicalFileName(pkg);
   const siblings = [];
   const ambiguous = [];
@@ -31,14 +30,14 @@ function managedSiblings(context, config, pkg, stagedId) {
     if (id === stagedId) continue;
     const attributes = mod.attributes || {};
     if (isOwnedBy(attributes, config, pkg)) {
-      if (context.profile?.modState?.[id]?.enabled) siblings.push(id);
+      if (includeDisabled ? Object.hasOwn(context.profile?.modState || {}, id) : context.profile?.modState?.[id]?.enabled) siblings.push(id);
       continue;
     }
     if (attributes.logicalFileName !== canonical) continue;
     const compatibleLegacy = pkg.nexus && ["nexus", "grailwright-local"].includes(attributes.source)
       && String(attributes.modId) === String(pkg.nexus.gameScopedModId);
     if (compatibleLegacy) {
-      if (context.profile?.modState?.[id]?.enabled) siblings.push(id);
+      if (includeDisabled ? Object.hasOwn(context.profile?.modState || {}, id) : context.profile?.modState?.[id]?.enabled) siblings.push(id);
       continue;
     }
     ambiguous.push(describeCollision(id, mod));
@@ -49,27 +48,6 @@ function managedSiblings(context, config, pkg, stagedId) {
 
 function assertStageLogicalNameIsUnambiguous(context, config, pkg) {
   managedSiblings({ ...context, profile: undefined }, config, pkg, undefined);
-}
-
-function legacyTarget(migration, canonical, gameId) {
-  return {
-    source: "nexus", modId: Number(migration.nexus.gameScopedModId), fileId: Number(migration.nexus.gameScopedFileId),
-    version: migration.expected.version, logicalFileName: canonical, downloadGame: gameId,
-    fileMD5: migration.archive.md5, fileSize: migration.archive.size, vdbReleaseVersionId: migration.nexus.versionId,
-  };
-}
-
-function hasVdbOwnership(attributes) {
-  return attributes?.vdbProjectId !== undefined || attributes?.vdbPackageId !== undefined || attributes?.vdbBuildId !== undefined;
-}
-
-function isMigrated(context, staged, target) {
-  const attributes = staged.attributes || {};
-  if (!Object.entries(target).every(([key, value]) => String(attributes[key]) === String(value))) return false;
-  const archiveId = staged.archiveId;
-  const download = archiveId && context.state.persistent?.downloads?.files?.[archiveId];
-  return !!download && String(download.fileMD5 || "").toLowerCase() === target.fileMD5
-    && Number(download.size) === target.fileSize;
 }
 
 async function listJson(root) {
@@ -100,7 +78,7 @@ class Engine {
       throw pending;
     }
     if (build.projectId !== config.id || build.packageId !== pkg.id || build.gameId !== config.gameId) throw new Error("Build belongs to another project, package or game");
-    const context = this.adapter.context(config.gameId, request.payload.profileId);
+    const context = this.adapter.context(config.gameId, request.payload.profileId, request.payload.stageOnly === true);
     const staged = context.mods[build.stagedId];
     if (!staged || staged.attributes?.vdbBuildId !== build.id || staged.installationPath !== build.stagedId || (staged.type || "") !== (pkg.modType || "")) throw new Error("Vortex staged identity has changed or is missing");
     const stagePath = inside(context.stagingRoot, build.stagedId);
@@ -116,7 +94,7 @@ class Engine {
     const actual = await inventory(path.join(this.root, "artifacts", payload.buildId));
     if (differences(payload.files, actual).length || fingerprint(actual) !== payload.contentHash) throw new Error("Prepared artifact changed");
     if (fingerprint({ project: config.id, package: pkg.id, version: payload.version, contentHash: payload.contentHash, configHash: request.configHash }).slice(0, 24) !== payload.buildId) throw new Error("Build identity does not match its contents");
-    const stageOnly = (pkg.activation || "stage-only") === "stage-only";
+    const stageOnly = payload.stageOnly === true || (pkg.activation || "stage-only") === "stage-only";
     const context = this.adapter.context(config.gameId, payload.profileId, stageOnly);
     assertStageLogicalNameIsUnambiguous(context, config, pkg);
     // Resolve the game extension's deployment type before writing staging.
@@ -145,7 +123,7 @@ class Engine {
     const attributes = {
       name: pkg.displayName, version: payload.version, logicalFileName: logicalFileName(pkg),
       source: "other", vdbProjectId: config.id, vdbPackageId: pkg.id, vdbBuildId: payload.buildId,
-      vdbPublication: "local", installTime: new Date().toISOString(),
+      vdbPublication: "local", vdbConflictInheritance: "pending", installTime: new Date().toISOString(),
     };
     if (pkg.nexus) {
       attributes.modId = Number(pkg.nexus.gameScopedModId);
@@ -163,7 +141,7 @@ class Engine {
       const previous = await readJson(recordPath);
       if (previous.configHash !== build.configHash || differences(previous.files, build.files).length) throw new Error("Build record differs");
     } catch (error) { if (error.code === "ENOENT") await atomicJson(recordPath, build); else throw error; }
-    if (pkg.activation === "replace-enabled-version") {
+    if (!stageOnly && pkg.activation === "replace-enabled-version") {
       if (!payload.profileId) throw new Error("Automatic activation needs an explicit profile");
       const refreshed = this.adapter.context(config.gameId, payload.profileId);
       const enabled = Object.entries(refreshed.mods).some(([id, mod]) => mod.attributes?.vdbProjectId === config.id
@@ -178,6 +156,8 @@ class Engine {
     if (!request.payload.profileId) throw new Error("Deployment requires an explicit profile ID");
     const { build, context } = await this.loadBuild(request, config, pkg);
     const siblings = managedSiblings(context, config, pkg, build.stagedId);
+    await this.adapter.inheritConflicts(config.gameId, request.payload.profileId, [{ target: build.stagedId, siblings,
+      files: build.files, deploymentRoot: this.adapter.deploymentRoot(config.gameId, pkg.modType) }], progress);
     await progress({ phase: "activating", profileId: context.profile.id, previousEnabled: siblings,
       targetPreviouslyEnabled: !!context.profile.modState?.[build.stagedId]?.enabled, target: build.stagedId });
     await this.adapter.activate(config.gameId, request.payload.profileId, build.stagedId, siblings);
@@ -205,6 +185,13 @@ class Engine {
 
   async deployBatch(request, config, progress) {
     const { builds, profileId } = request.payload;
+    let expectedEnabled = request.payload.expectedEnabled;
+    const assertSelection = () => {
+      if (!expectedEnabled) return;
+      const actual = Object.entries(this.adapter.context(config.gameId, profileId).profile.modState || {})
+        .filter(([, value]) => value.enabled).map(([id]) => id).sort();
+      if (JSON.stringify(actual) !== JSON.stringify(expectedEnabled)) throw new Error("Profile enabled state changed during finalization; no further activation was attempted");
+    };
     if (!profileId || !Array.isArray(builds) || !builds.length || builds.length > 100) throw new Error("Batch needs a profile and 1-100 builds");
     const packages = new Set();
     const prepared = [];
@@ -220,11 +207,20 @@ class Engine {
         targetPreviouslyEnabled: !!loaded.context.profile.modState?.[loaded.build.stagedId]?.enabled });
     }
     await progress({ phase: "batch-validated", profileId, selections: prepared.map(x => ({ packageId: x.pkg.id, target: x.build.stagedId, previousEnabled: x.siblings, targetPreviouslyEnabled: x.targetPreviouslyEnabled })) });
+    if (request.operation === "finish") await this.adapter.assertDeploymentReady(config.gameId, profileId);
+    assertSelection();
+    await this.adapter.inheritConflicts(config.gameId, profileId, prepared.map(item => ({ target: item.build.stagedId,
+      siblings: item.siblings, files: item.build.files, deploymentRoot: this.adapter.deploymentRoot(config.gameId, item.pkg.modType) })), progress);
     for (const item of prepared) {
+      if (request.operation === "finish") await this.adapter.assertDeploymentReady(config.gameId, profileId);
       await progress({ phase: "batch-activating", packageId: item.pkg.id });
+      assertSelection();
       await this.adapter.activate(config.gameId, profileId, item.build.stagedId, item.siblings);
+      if (expectedEnabled) expectedEnabled = [...new Set([...expectedEnabled.filter(id => !item.siblings.includes(id)), item.build.stagedId])].sort();
     }
     await progress({ phase: "deploying" });
+    if (request.operation === "finish") await this.adapter.assertDeploymentReady(config.gameId, profileId);
+    assertSelection();
     await this.adapter.deploy(config.gameId, profileId);
     const verification = [];
     for (const item of prepared) verification.push({ packageId: item.pkg.id, ...await this.verify(item.subrequest, config, item.pkg) });
@@ -244,87 +240,6 @@ class Engine {
     if (differences(build.files, await inspectZip(archive)).length) throw new Error("Published archive does not match the staged payload layout");
     await progress({ phase: "promoting-metadata" });
     return this.adapter.promote(config.gameId, build.stagedId, r, archive, logicalFileName(pkg));
-  }
-
-  async legacyPublicationPreflight(request, config, pkg) {
-    const payload = request.payload || {};
-    const trusted = await trustedMigration(this.root, payload.migrationReceiptId, payload.migrationSignature);
-    const migration = trusted.migration;
-    if (migration.projectId !== config.id || migration.packageId !== pkg.id || migration.gameId !== config.gameId
-        || migration.stagedId !== payload.stagedId) throw new Error("Trusted migration receipt does not match this request");
-    if (!pkg.nexus || migration.nexus.gameDomain !== pkg.nexus.gameDomain
-        || migration.nexus.gameScopedModId !== String(pkg.nexus.gameScopedModId)
-        || migration.nexus.groupId !== String(pkg.nexus.groupId)
-        || migration.expected.modId !== migration.nexus.gameScopedModId) {
-      throw new Error("Migration receipt does not match the configured package Nexus identity");
-    }
-    const context = this.adapter.context(config.gameId);
-    const staged = context.mods[migration.stagedId];
-    if (!staged || staged.installationPath !== migration.stagedId) throw new Error("Exact legacy staged mod is missing or its staging identity changed");
-    if (hasVdbOwnership(staged.attributes)) throw new Error("Legacy staged mod has conflicting VDB ownership");
-    const stagePath = inside(context.stagingRoot, migration.stagedId);
-    const stageFiles = await inventory(stagePath);
-    const archive = path.join(this.root, "releases", migration.archive.sha256, releaseArchiveName(migration.archive.sha256));
-    if ((await fs.stat(archive)).size !== migration.archive.size || await hash(archive) !== migration.archive.sha256
-        || await hash(archive, "md5") !== migration.archive.md5) throw new Error("Trusted legacy release archive fingerprints differ");
-    const archiveFiles = await inspectZip(archive);
-    const layoutDifferences = differences(archiveFiles, stageFiles);
-    if (layoutDifferences.length) throw new Error(`Legacy staged payload differs from the trusted release archive: ${JSON.stringify(layoutDifferences.slice(0, 10))}`);
-    const target = legacyTarget(migration, logicalFileName(pkg), config.gameId);
-    const alreadyMigrated = isMigrated(context, staged, target);
-    const attributes = staged.attributes || {};
-    const actualIdentity = {
-      source: attributes.source ?? null,
-      logicalFileName: attributes.logicalFileName ?? null,
-      modId: attributes.modId == null ? null : String(attributes.modId),
-      version: attributes.version == null ? null : String(attributes.version),
-    };
-    const expectedIdentity = {
-      source: migration.expected.source,
-      logicalFileName: migration.expected.logicalFileName,
-      modId: migration.expected.modId,
-      version: migration.expected.version,
-    };
-    const identityMatches = actualIdentity.source === expectedIdentity.source
-      && actualIdentity.logicalFileName === expectedIdentity.logicalFileName
-      && actualIdentity.modId === expectedIdentity.modId
-      && actualIdentity.version === expectedIdentity.version;
-    const unattributed = Object.values(actualIdentity).every(value => value === null);
-    if (!alreadyMigrated && !identityMatches && !(migration.expected.allowUnattributed && unattributed)) {
-      throw new Error(`Legacy staged mod no longer matches the exact trusted source, logical filename, page ID and version; actual=${JSON.stringify(actualIdentity)} expected=${JSON.stringify(expectedIdentity)}`);
-    }
-    let nexusMetadata = "already-migrated";
-    if (!alreadyMigrated) {
-      const verification = await this.adapter.verifyNexusMetadata(config.gameId, {
-        md5: migration.archive.md5,
-        size: migration.archive.size,
-        gameScopedModId: migration.nexus.gameScopedModId,
-        gameScopedFileId: migration.nexus.gameScopedFileId,
-      }, archive, migration.archive.fileName, migration.nexus.allowUnattributedArchive);
-      nexusMetadata = verification.status;
-    }
-    return { migration, context, staged, archive, archiveFiles, target, alreadyMigrated,
-      preview: { stagedId: migration.stagedId, action: alreadyMigrated ? "already-migrated" : "apply",
-        identityEvidence: identityMatches ? "exact-legacy-metadata" : (unattributed ? "exact-unattributed-stage" : "already-migrated"),
-        nexusMetadata,
-        from: { source: attributes.source, logicalFileName: attributes.logicalFileName, modId: attributes.modId,
-          fileId: attributes.fileId, version: attributes.version, archiveId: staged.archiveId || null },
-        to: target, archive: { sha256: migration.archive.sha256, md5: migration.archive.md5, size: migration.archive.size,
-          fileCount: archiveFiles.length }, stagingFileCount: stageFiles.length, layoutDifferences } };
-  }
-
-  async legacyPublication(request, config, pkg, progress, apply) {
-    const checked = await this.legacyPublicationPreflight(request, config, pkg);
-    await progress({ phase: "legacy-publication-preview", preview: checked.preview });
-    if (!apply || checked.alreadyMigrated) return checked.preview;
-    await progress({ phase: "legacy-publication-applying", stagedId: checked.migration.stagedId });
-    await this.adapter.legacyPublication(config.gameId, checked.migration.stagedId, checked.migration, checked.archive, logicalFileName(pkg));
-    const refreshed = this.adapter.context(config.gameId);
-    const updated = refreshed.mods[checked.migration.stagedId];
-    if (!updated || hasVdbOwnership(updated.attributes) || !isMigrated(refreshed, updated, checked.target)) {
-      throw new Error("Legacy publication migration did not retain the exact verified Vortex state");
-    }
-    return { ...checked.preview, action: "applied" };
   }
 
   async reconcile(_request, config, pkg, progress) {
@@ -361,28 +276,33 @@ class Engine {
       ? { ...previous, status: "running", error: undefined, retryAfter: undefined }
       : { id: request.id, requestHash, projectId: request.projectId, packageId: request.packageId, operation: request.operation, status: "running", startedAt: new Date().toISOString(), history: [] };
     const progress = async step => {
-      journal = { ...journal, ...step, history: [...journal.history, { ...step, at: new Date().toISOString() }] };
+      journal = { ...journal, ...step, history: [...journal.history, { ...step, at: new Date().toISOString() }].slice(-200) };
       await atomicJson(resultPath, journal);
     };
     try {
       const { config, pkg } = await this.resolve(request);
       await progress({ phase: "validated" });
       let result;
-      if (request.operation === "stage") result = await this.stage(request, config, pkg, progress);
+      if (request.operation === "finish") result = request.protocolVersion === 3
+        ? await require("./profile-finish").finish(this, request, config, progress, managedSiblings, previous?.result)
+        : await require("./finish").finish(this, request, config, progress, managedSiblings);
+      else if (request.operation === "stage") result = await this.stage(request, config, pkg, progress);
       else if (request.operation === "deploy") result = await this.deploy(request, config, pkg, progress);
       else if (request.operation === "deploy-batch") result = await this.deployBatch(request, config, progress);
-       else if (request.operation === "verify") result = await this.verify(request, config, pkg);
-       else if (request.operation === "promote" && this.promote) result = await this.promote(request, config, pkg, progress);
-       else if (request.operation === "reconcile") result = await this.reconcile(request, config, pkg, progress);
-       else if (request.operation === "legacy-publication-dry-run") result = await this.legacyPublication(request, config, pkg, progress, false);
-       else if (request.operation === "legacy-publication-apply") result = await this.legacyPublication(request, config, pkg, progress, true);
+      else if (request.operation === "verify") result = await this.verify(request, config, pkg);
+      else if (request.operation === "promote" && this.promote) result = await this.promote(request, config, pkg, progress);
+      else if (request.operation === "reconcile") result = await this.reconcile(request, config, pkg, progress);
       else throw new Error("Operation is not available in this build");
-      await atomicJson(resultPath, { ...journal, status: "completed", completedAt: new Date().toISOString(), result });
+      await atomicJson(resultPath, { ...journal, status: result.pending ? "pending" : result.superseded ? "superseded" : "completed",
+        completedAt: result.pending ? undefined : new Date().toISOString(),
+        error: result.pending ? result.profiles?.filter(p => p.status === "pending").map(p => p.reason).join("; ") : undefined, result });
     } catch (error) {
       const expired = Date.parse(request.expiresAt) <= Date.now();
       const retryablePromotion = request.operation === "promote"
         && ["VDB_BUILD_PENDING", "VDB_INACTIVE_GAME", "VDB_RETRYABLE"].includes(error.code);
-      if (retryablePromotion && !expired) {
+      const waitingFinish = [2, 3].includes(request.protocolVersion) && request.operation === "finish" && !journal.deploymentStarted
+        && ["VDB_INACTIVE_GAME", "VDB_INACTIVE_PROFILE", "VDB_WAITING"].includes(error.code);
+      if (waitingFinish || retryablePromotion && !expired) {
         await atomicJson(resultPath, { ...journal, status: "pending", error: error.message,
           retryAfter: new Date(Date.now() + 5000).toISOString() });
       } else {
@@ -392,7 +312,7 @@ class Engine {
   }
 
   async tick() {
-    if (this.busy) return;
+    if (this.busy) return false;
     this.busy = true;
     try {
       await lock(path.join(this.root, "consumer"), async () => {
@@ -405,7 +325,8 @@ class Engine {
         const receipt = await readJson(path.join(this.root, "receipts", file));
         receipts.push({ id: receipt.id, projectId: receipt.projectId, packageId: receipt.packageId,
           operation: receipt.operation, status: receipt.status, startedAt: receipt.startedAt,
-          error: receipt.error, phase: receipt.phase,
+          error: receipt.error, phase: receipt.phase, staging: receipt.staging, deploymentStarted: receipt.deploymentStarted,
+          deployment: receipt.result?.deployment, activation: receipt.result?.activation, skipped: receipt.result?.skipped, profiles: receipt.result?.profiles,
           verification: receipt.result?.verification || (receipt.operation === "verify" ? receipt.result : undefined) });
       }
       receipts.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
@@ -417,10 +338,11 @@ class Engine {
       }
       await atomicJson(path.join(this.root, "status.json"), {
         protocolVersion: 1, extensionVersion: require("../../package.json").version,
-        capabilities: ["stage", "deploy", "deploy-batch", "verify", "rollback", "promote", "reconcile", "legacy-publication-dry-run", "legacy-publication-apply"], observedAt: new Date().toISOString(),
+        capabilities: ["stage", "deploy", "deploy-batch", "verify", "rollback", "promote", "reconcile", "durable-finish-v2", "profile-finish-v3"], observedAt: new Date().toISOString(),
         ...this.adapter.snapshot(), projects, receipts: receipts.slice(0, 100),
       });
       });
+      return true;
     } finally { this.busy = false; }
   }
 }

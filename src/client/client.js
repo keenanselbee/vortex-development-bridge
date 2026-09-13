@@ -5,7 +5,6 @@ const path = require("node:path");
 const { project, VERSION } = require("../protocol/config");
 const { atomicJson, readJson, inventory, fingerprint, differences, inside, lock } = require("../protocol/files");
 const { enqueue, makeRequest } = require("../protocol/queue");
-const { receipt: migrationReceipt, trust: trustMigration } = require("../protocol/migration");
 
 async function register(root, file) {
   const registration = await project(file);
@@ -19,12 +18,11 @@ async function registered(root, id) {
   return readJson(path.join(root, "projects", id + ".json"));
 }
 
-async function stage(root, id, packageId, artifact, version, profileId) {
+async function prepare(root, registration, packageId, artifact, version) {
   if (!VERSION.test(version || "")) throw new Error("Pass a semantic --version, for example 0.1.0");
-  const registration = await registered(root, id);
+  const id = registration.config.id;
   const pkg = registration.config.packages.find(p => p.id === packageId);
   if (!pkg) throw new Error("Package is not registered");
-  if ((pkg.activation || "stage-only") === "replace-enabled-version" && !profileId) throw new Error("Automatic activation requires an explicit --profile");
   const source = path.resolve(artifact);
   const files = await inventory(source);
   if (!files.length) throw new Error("Artifact is empty");
@@ -48,9 +46,36 @@ async function stage(root, id, packageId, artifact, version, profileId) {
     }
     if (differences(files, await inventory(artifactRoot)).length) throw new Error("Existing prepared artifact differs");
   });
-  const request = makeRequest(registration, packageId, "stage", { buildId, version, files, contentHash, profileId: profileId || null });
+  return { packageId, buildId, version, files, contentHash };
+}
+
+async function stage(root, id, packageId, artifact, version, profileId) {
+  const registration = await registered(root, id);
+  const pkg = registration.config.packages.find(p => p.id === packageId);
+  if (pkg?.activation === "replace-enabled-version" && !profileId) throw new Error("Automatic activation requires an explicit --profile");
+  const build = await prepare(root, registration, packageId, artifact, version);
+  const request = makeRequest(registration, packageId, "stage", { ...build, profileId: profileId || null });
   await enqueue(root, request);
-  return { id: request.id, buildId, status: "queued", files: files.length };
+  return { id: request.id, buildId: build.buildId, status: "queued", files: build.files.length };
+}
+
+async function finish(root, id, selections, profileId, stageOnly = false) {
+  if (typeof stageOnly !== "boolean") throw new Error("Invalid stage-only choice");
+  if (profileId !== undefined && profileId !== null && (typeof profileId !== "string" || !profileId.trim() || profileId === "*")) throw new Error("Invalid explicit profile ID");
+  if (!Array.isArray(selections) || !selections.length || selections.length > 100) throw new Error("Finish needs 1-100 build selections");
+  if (new Set(selections.map(b => b.packageId)).size !== selections.length) throw new Error("Finish selects multiple builds for one package");
+  const registration = await registered(root, id);
+  const snapshot = await status(root);
+  const { CAPABILITY, enqueueFinish } = require("../protocol/intents");
+  if (snapshot.status !== "unavailable" && !snapshot.stale && !snapshot.capabilities?.includes(CAPABILITY)) {
+    throw new Error("The running Vortex extension does not support durable finish. Update the extension before queueing this operation.");
+  }
+  const builds = [];
+  for (const selection of selections) builds.push(await prepare(root, registration, selection.packageId, selection.artifact, selection.version));
+  const request = await enqueueFinish(root, registration, builds, profileId, stageOnly);
+  return { id: request.id, buildId: builds.length === 1 ? builds[0].buildId : undefined,
+    builds: builds.map(({ packageId, buildId, version }) => ({ packageId, buildId, version })), status: "queued", protocolVersion: 3,
+    profileScope: request.payload.profileScope, profileId: request.payload.profileId };
 }
 
 async function submit(root, id, packageId, operation, payload) {
@@ -64,7 +89,8 @@ async function submit(root, id, packageId, operation, payload) {
 async function status(root) {
   try {
     const state = await readJson(path.join(root, "status.json"));
-    return { ...state, stale: Date.now() - Date.parse(state.observedAt) > 20000 };
+    const age = Date.now() - Date.parse(state.observedAt);
+    return { ...state, stale: !Number.isFinite(age) || age < 0 || age > 20000 };
   } catch (error) {
     if (error.code === "ENOENT") return { status: "unavailable", reason: "Vortex has not written a status snapshot. Install/enable the extension and open Vortex." };
     throw error;
@@ -96,30 +122,8 @@ async function storeRelease(root, sourcePath, release) {
   return destination;
 }
 
-async function legacyPublicationMigration(root, id, packageId, stagedId, migrationPath, apply) {
-  const registration = await registered(root, id);
-  const pkg = registration.config.packages.find(item => item.id === packageId);
-  if (!pkg) throw new Error("Package is not registered");
-  const source = await readJson(path.resolve(migrationPath));
-  const migration = migrationReceipt(source);
-  if (migration.projectId !== id || migration.packageId !== packageId || migration.stagedId !== stagedId) {
-    throw new Error("Migration receipt does not match the requested project, package and staged ID");
-  }
-  if (migration.gameId !== registration.config.gameId || !pkg.nexus
-      || migration.nexus.gameDomain !== pkg.nexus.gameDomain
-      || migration.nexus.gameScopedModId !== String(pkg.nexus.gameScopedModId)
-      || migration.nexus.groupId !== String(pkg.nexus.groupId)) {
-    throw new Error("Migration receipt does not match the registered package Nexus identity");
-  }
-  await storeRelease(root, migration.archive.path, migration.archive);
-  const trusted = await trustMigration(root, source);
-  return submit(root, id, packageId, apply ? "legacy-publication-apply" : "legacy-publication-dry-run", {
-    stagedId, migrationReceiptId: trusted.id, migrationSignature: trusted.signature,
-  });
-}
-
 function reconcile(root, id, packageId) {
   return submit(root, id, packageId, "reconcile", {});
 }
 
-module.exports = { register, registered, stage, submit, status, promote, reconcile, legacyPublicationMigration };
+module.exports = { register, registered, stage, finish, submit, status, promote, reconcile };

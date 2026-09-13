@@ -42,13 +42,21 @@ async function fixture(t) {
     if (action.kind === "enabled") state.persistent.profiles[action.profile].modState[action.id] = { enabled: action.value };
     if (action.kind === "attribute") state.persistent.mods[action.game][action.id].attributes[action.key] = action.value;
     if (action.kind === "archive") state.persistent.mods[action.game][action.id].archiveId = action.archiveId;
+    if (action.kind === "rule") {
+      const mod = state.persistent.mods[action.game][action.id];
+      mod.rules = [...(mod.rules || []), action.rule];
+    }
+    if (action.kind === "overrides") state.persistent.mods[action.game][action.id].fileOverrides = action.files;
   } } };
   let activeGameId = "example";
   const vortex = { selectors: { activeGameId: () => activeGameId, activeProfile: () => activeGameId === "example" ? state.persistent.profiles.p1 : undefined, installPathForGame: () => staging },
     actions: { setModEnabled: (profile, id, value) => ({ kind: "enabled", profile, id, value }),
       setModAttribute: (game, id, key, value) => ({ kind: "attribute", game, id, key, value }),
+      addModRule: (game, id, rule) => ({ kind: "rule", game, id, rule }),
+      setFileOverride: (game, id, files) => ({ kind: "overrides", game, id, files }),
       setModArchiveId: (game, id, archiveId) => ({ kind: "archive", game, id, archiveId }) },
-    util: { getGame: () => ({ getModPaths: () => ({ "": live }) }) } };
+    util: { getGame: () => ({ getModPaths: () => ({ "": live }) }),
+      testModReference: (mod, ref) => ref.id === mod.id } };
   const engine = new Engine(bridge, createAdapter(api, vortex));
   return { root, bridge, artifact, staging, live, engine, state, api, config, configPath,
     deployments: () => deployments, fail: () => { failDeployment = true; }, activeGame: value => { activeGameId = value; } };
@@ -103,6 +111,40 @@ test("stage, deploy, drift detection and rollback preserve independent builds", 
   const verify = await client.submit(f.bridge, "demo", "main", "verify", { buildId: first.buildId });
   await f.engine.tick();
   assert.match((await receipt(f.bridge, verify.id)).error, /drift/);
+});
+
+test("queued upgrade inherits at activation, journals choices and retains them on rollback", async t => {
+  const f = await fixture(t);
+  const first = await client.stage(f.bridge, "demo", "main", f.artifact, "0.1.0");
+  await f.engine.tick();
+  const firstBuild = await readJson(path.join(f.bridge, "builds", first.buildId + ".json"));
+  const deploy = await client.submit(f.bridge, "demo", "main", "deploy", { buildId: first.buildId, profileId: "p1" });
+  await f.engine.tick();
+  assert.equal((await receipt(f.bridge, deploy.id)).status, "completed");
+  f.state.persistent.mods.example.other = { id: "other", attributes: {} };
+  const previous = f.state.persistent.mods.example[firstBuild.stagedId];
+  previous.rules = [{ type: "after", reference: { id: "other" } }];
+  previous.fileOverrides = [path.join(f.live, "data.bin")];
+  await fs.writeFile(path.join(f.artifact, "data.bin"), "next payload");
+  const second = await client.stage(f.bridge, "demo", "main", f.artifact, "0.1.1");
+  await f.engine.tick();
+  const secondBuild = await readJson(path.join(f.bridge, "builds", second.buildId + ".json"));
+  const next = f.state.persistent.mods.example[secondBuild.stagedId];
+  assert.equal(next.rules, undefined, "staging must not inherit or activate");
+  const upgrade = await client.submit(f.bridge, "demo", "main", "deploy", { buildId: second.buildId, profileId: "p1" });
+  await f.engine.tick();
+  const result = await receipt(f.bridge, upgrade.id);
+  assert.equal(result.status, "completed");
+  assert.equal(result.conflictInheritance[0].source, firstBuild.stagedId);
+  assert.deepEqual(next.rules, previous.rules);
+  assert.deepEqual(next.fileOverrides, previous.fileOverrides);
+  const saved = structuredClone(previous);
+  next.rules = [];
+  const rollback = await client.submit(f.bridge, "demo", "main", "deploy", { buildId: first.buildId, profileId: "p1", rollback: true });
+  await f.engine.tick();
+  assert.equal((await receipt(f.bridge, rollback.id)).status, "completed");
+  assert.deepEqual(previous, saved);
+  assert.deepEqual(next.rules, []);
 });
 
 test("canonical logical names group VDB variants without changing ownership", async t => {
@@ -163,6 +205,8 @@ test("activation treats an exact Nexus legacy version as an exclusive sibling", 
   f.state.persistent.mods.example.retainedLocal = { id: "retainedLocal", attributes: { logicalFileName: "Canonical Demo", source: "grailwright-local", modId: 1 } };
   f.state.persistent.profiles.p1.modState.legacy = { enabled: true };
   f.state.persistent.profiles.p1.modState.retainedLocal = { enabled: true };
+  const build = await readJson(path.join(f.bridge, "builds", stage.buildId + ".json"));
+  f.state.persistent.mods.example[build.stagedId].rules = []; // Explicit target choices bypass inheritance.
   let siblings;
   f.engine.adapter.activate = async (_gameId, _profileId, _target, candidates) => { siblings = candidates; };
   f.engine.adapter.deploy = async () => {};
@@ -419,223 +463,83 @@ test("batch deployment validates all packages before activating and deploys once
   const result = await receipt(f.bridge, good.id);
   assert.equal(result.status, "completed");
   assert.equal(result.result.verification.length, 2);
+  assert.equal(result.conflictInheritance.length, 2);
+  assert.ok(result.conflictInheritance.every(update => update.disposition === "inherited"));
   assert.equal(f.deployments(), 1);
 });
 
-async function legacyPublicationFixture(t) {
+test("normal promotion waits for exact imported bytes and rejects unattributed metadata", async t => {
   const f = await fixture(t);
   const { createZip } = require("../src/protocol/archive");
   const { hash } = require("../src/protocol/files");
-  const archive = path.join(f.root, "legacy-release.zip");
+  const stage = await client.stage(f.bridge, "demo", "main", f.artifact, "0.1.0");
+  await f.engine.tick();
+  const archive = path.join(f.root, "published.zip");
   await createZip(f.artifact, archive);
-  const fingerprints = { path: archive, sha256: await hash(archive), md5: await hash(archive, "md5"), size: (await fs.stat(archive)).size };
-  const stagedId = "Legacy Demo 0.1.0";
-  await fs.cp(f.artifact, path.join(f.staging, stagedId), { recursive: true });
-  f.state.persistent.mods.example[stagedId] = { id: stagedId, installationPath: stagedId, type: "", state: "installed", attributes: {
-    source: "grailwright-local", logicalFileName: "Legacy Demo", modId: 1, version: "0.1.0",
-  } };
-  const migration = { schemaVersion: 1, type: "vdb-legacy-publication-migration", projectId: "demo", packageId: "main", gameId: "example", stagedId,
-    expected: { source: "grailwright-local", logicalFileName: "Legacy Demo", modId: "1", version: "0.1.0" },
-    nexus: { gameDomain: "example", gameScopedModId: "1", groupId: "2", gameScopedFileId: "3", versionId: "version-3" },
-    archive: { ...fingerprints, fileName: "Legacy Demo 0.1.0.zip" } };
-  const migrationPath = path.join(f.root, "legacy-migration.json");
-  await atomicJson(migrationPath, migration);
-  f.state.persistent.downloads.files.legacy = { fileMD5: fingerprints.md5, size: fingerprints.size };
-  f.api.lookupModMeta = async () => [{ source: "nexus", details: { modId: 1, fileId: 3 }, fileMD5: fingerprints.md5, fileSizeBytes: fingerprints.size }];
-  return { f, migration, migrationPath, stagedId, fingerprints };
-}
-
-test("legacy publication dry-run previews the exact trusted record without Vortex mutations", async t => {
-  const { f, migrationPath, stagedId, fingerprints } = await legacyPublicationFixture(t);
-  const profileBefore = structuredClone(f.state.persistent.profiles.p1.modState);
-  const before = structuredClone(f.state.persistent.mods.example[stagedId]);
-  const request = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  const result = await receipt(f.bridge, request.id);
-  assert.equal(result.status, "completed");
-  assert.equal(result.result.action, "apply");
-  assert.equal(result.result.from.source, "grailwright-local");
-  assert.equal(result.result.to.logicalFileName, "Demo");
-  assert.equal(result.result.nexusMetadata, "verified");
-  assert.deepEqual(f.state.persistent.mods.example[stagedId], before);
-  assert.deepEqual(f.state.persistent.profiles.p1.modState, profileBefore);
-  assert.equal(f.deployments(), 0);
-  const queued = await readJson(path.join(f.bridge, "requests", request.id + ".json"));
-  assert.match(await fs.readFile(path.join(f.bridge, "migration-receipts", queued.payload.migrationReceiptId + ".json"), "utf8"), /local-user-trusted/);
-  assert.equal((await fs.stat(path.join(f.bridge, "releases", fingerprints.sha256,
-    `vdb-${fingerprints.sha256}.zip`))).size, fingerprints.size);
-});
-
-test("legacy publication applies only exact verified metadata and is idempotent without VDB ownership", async t => {
-  const { f, migrationPath, stagedId, fingerprints } = await legacyPublicationFixture(t);
-  const profileBefore = structuredClone(f.state.persistent.profiles.p1.modState);
-  const request = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, true);
-  await f.engine.tick();
-  const result = await receipt(f.bridge, request.id);
-  const staged = f.state.persistent.mods.example[stagedId];
-  assert.equal(result.status, "completed");
-  assert.equal(result.result.action, "applied");
-  assert.deepEqual({ source: staged.attributes.source, modId: staged.attributes.modId, fileId: staged.attributes.fileId,
-    version: staged.attributes.version, logicalFileName: staged.attributes.logicalFileName, fileMD5: staged.attributes.fileMD5,
-    fileSize: staged.attributes.fileSize, vdbReleaseVersionId: staged.attributes.vdbReleaseVersionId },
-  { source: "nexus", modId: 1, fileId: 3, version: "0.1.0", logicalFileName: "Demo", fileMD5: fingerprints.md5,
-    fileSize: fingerprints.size, vdbReleaseVersionId: "version-3" });
-  assert.equal(staged.attributes.vdbProjectId, undefined);
-  assert.equal(staged.attributes.vdbPackageId, undefined);
-  assert.equal(staged.attributes.vdbBuildId, undefined);
-  assert.equal(staged.archiveId, "legacy");
-  assert.deepEqual(f.state.persistent.profiles.p1.modState, profileBefore);
-  assert.equal(f.deployments(), 0);
-  f.engine.adapter.legacyPublication = async () => { throw new Error("idempotent migration must not write"); };
-  const again = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, true);
-  await f.engine.tick();
-  assert.equal((await receipt(f.bridge, again.id)).result.action, "already-migrated");
-  assert.equal(f.deployments(), 0);
-});
-
-test("legacy publication dry-run requires exact Nexus metadata before apply", async t => {
-  const { f, migrationPath, stagedId, fingerprints } = await legacyPublicationFixture(t);
-  f.api.lookupModMeta = async () => [{ source: "nexus", details: { modId: 1, fileId: 99 },
-    fileMD5: "00000000000000000000000000000000", fileSizeBytes: 1, fileName: "wrong.zip" }];
-  const before = structuredClone(f.state.persistent.mods.example[stagedId]);
-  const request = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  const result = await receipt(f.bridge, request.id);
-  assert.equal(result.status, "failed");
-  assert.match(result.error, /cannot yet verify the exact published Nexus archive/);
-  assert.match(result.error, /"fileId":99/);
-  assert.match(result.error, /"fileName":"Legacy Demo 0.1.0.zip"/);
-  assert.deepEqual(f.state.persistent.mods.example[stagedId], before);
-  assert.equal(f.deployments(), 0);
-
-  f.api.lookupModMeta = async () => [{ source: null, details: {}, fileMD5: fingerprints.md5,
-    fileSizeBytes: fingerprints.size, fileName: null }];
-  const unattributed = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  assert.match((await receipt(f.bridge, unattributed.id)).error, /cannot yet verify the exact published Nexus archive/);
-});
-
-test("legacy publication may derive Nexus metadata from one exact wholly unattributed archive", async t => {
-  const { f, migration, migrationPath, stagedId, fingerprints } = await legacyPublicationFixture(t);
-  migration.expected.allowUnattributed = true;
-  migration.nexus.allowUnattributedArchive = true;
-  await atomicJson(migrationPath, migration);
-  f.state.persistent.mods.example[stagedId].attributes = {};
-  f.api.lookupModMeta = async () => [{ source: null, details: {}, fileMD5: fingerprints.md5,
-    fileSizeBytes: fingerprints.size, fileName: null }];
-  const dryRun = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  const preview = await receipt(f.bridge, dryRun.id);
-  assert.equal(preview.status, "completed");
-  assert.equal(preview.result.identityEvidence, "exact-unattributed-stage");
-  assert.equal(preview.result.nexusMetadata, "exact-unattributed-archive");
-  assert.equal(f.deployments(), 0);
-
-  const apply = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, true);
-  await f.engine.tick();
-  assert.equal((await receipt(f.bridge, apply.id)).result.action, "applied");
-  assert.equal(f.state.persistent.mods.example[stagedId].attributes.source, "nexus");
-  assert.equal(f.state.persistent.mods.example[stagedId].attributes.fileId, 3);
-  assert.equal(f.deployments(), 0);
-});
-
-test("legacy publication rejects ambiguous or partially attributed exact archives", async t => {
-  const { f, migration, migrationPath, stagedId, fingerprints } = await legacyPublicationFixture(t);
-  migration.expected.allowUnattributed = true;
-  migration.nexus.allowUnattributedArchive = true;
-  await atomicJson(migrationPath, migration);
-  f.state.persistent.mods.example[stagedId].attributes = {};
-  const unattributed = { source: null, details: {}, fileMD5: fingerprints.md5,
-    fileSizeBytes: fingerprints.size, fileName: null };
-  f.api.lookupModMeta = async () => [unattributed, { ...unattributed }];
-  const ambiguous = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  assert.match((await receipt(f.bridge, ambiguous.id)).error, /cannot yet verify the exact published Nexus archive/);
-
-  f.api.lookupModMeta = async () => [{ ...unattributed, details: { modId: 1 } }];
-  const partial = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  assert.match((await receipt(f.bridge, partial.id)).error, /cannot yet verify the exact published Nexus archive/);
-  assert.equal(f.deployments(), 0);
-});
-
-test("legacy publication waits for an imported archive identity to settle", async t => {
-  const { f, migrationPath, stagedId, fingerprints } = await legacyPublicationFixture(t);
-  delete f.state.persistent.downloads.files.legacy;
-  f.api.events.once("import-downloads", (_paths, done) => {
-    assert.equal(path.basename(_paths[0]), `vdb-${fingerprints.sha256}.zip`);
-    done(["delayed-download"]);
+  const release = { gameDomain: "example", gameScopedModId: "1", groupId: "2", gameScopedFileId: "3",
+    versionId: "v1", version: "0.1.0", fileName: "Published Demo.zip", archive,
+    sha256: await hash(archive), md5: await hash(archive, "md5"), size: (await fs.stat(archive)).size };
+  const releasePath = path.join(f.root, "published.json");
+  await atomicJson(releasePath, release);
+  const record = await readJson(path.join(f.bridge, "builds", stage.buildId + ".json"));
+  const mod = f.state.persistent.mods.example[record.stagedId];
+  const before = structuredClone(mod);
+  let imports = 0;
+  f.api.events.on("import-downloads", (paths, done) => {
+    imports++;
+    assert.equal(path.basename(paths[0]), `vdb-${release.sha256}.zip`);
+    assert.deepEqual(mod, before, "metadata must wait for the imported archive fingerprint");
+    done(["delayed"]);
     setTimeout(() => {
-      f.state.persistent.downloads.files["delayed-download"] = {
-        id: "delayed-download", fileMD5: fingerprints.md5, size: fingerprints.size,
-      };
+      f.state.persistent.downloads.files.delayed = { fileMD5: release.md5, size: release.size };
     }, 25);
   });
-  const request = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, true);
+  f.api.lookupModMeta = async () => [{ fileMD5: release.md5, fileSizeBytes: release.size }];
+  const request = await client.promote(f.bridge, "demo", "main", stage.buildId, releasePath);
   await f.engine.tick();
-  const result = await receipt(f.bridge, request.id);
-  assert.equal(result.status, "completed");
-  assert.equal(result.result.action, "applied");
-  assert.equal(f.state.persistent.mods.example[stagedId].archiveId, "delayed-download");
+  assert.equal((await receipt(f.bridge, request.id)).status, "pending");
+  assert.equal(imports, 0, "normal promotion cannot use the retired attribution exception");
+  assert.deepEqual(mod, before);
+  f.api.lookupModMeta = async query => {
+    assert.equal(query.fileName, release.fileName);
+    return [{ source: "nexus", details: { modId: 1, fileId: 3 }, fileMD5: release.md5, fileSizeBytes: release.size }];
+  };
+  await f.engine.tick();
+  assert.equal((await receipt(f.bridge, request.id)).status, "completed");
+  assert.equal(mod.archiveId, "delayed");
+  assert.equal(mod.attributes.vdbPublication, "verified");
+  assert.equal(mod.attributes.vdbBuildId, stage.buildId);
+  await f.engine.tick();
+  assert.equal(imports, 1);
   assert.equal(f.deployments(), 0);
 });
 
-test("legacy publication may adopt an explicitly trusted wholly unattributed stage", async t => {
-  const { f, migration, migrationPath, stagedId } = await legacyPublicationFixture(t);
-  migration.expected.allowUnattributed = true;
-  await atomicJson(migrationPath, migration);
-  f.state.persistent.mods.example[stagedId].attributes = {};
-  const before = structuredClone(f.state.persistent.mods.example[stagedId]);
-  const request = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
+test("retired migration requests cannot mutate Vortex or erase historical receipts", async t => {
+  const f = await fixture(t);
+  const { makeRequest } = require("../src/protocol/queue");
+  const { fingerprint } = require("../src/protocol/files");
+  const registration = await client.registered(f.bridge, "demo");
+  const stateBefore = structuredClone(f.state);
+  for (const operation of ["legacy-publication-dry-run", "legacy-publication-apply"]) {
+    const request = { ...makeRequest(registration, "main", "verify", {}), operation };
+    await atomicJson(path.join(f.bridge, "requests", request.id + ".json"), request);
+    const completedRequest = { ...makeRequest(registration, "main", "verify", {}), operation };
+    await atomicJson(path.join(f.bridge, "requests", completedRequest.id + ".json"), completedRequest);
+    const completed = { id: completedRequest.id, requestHash: fingerprint(completedRequest),
+      projectId: "demo", packageId: "main", operation, status: "completed", result: { action: "applied" } };
+    const completedPath = path.join(f.bridge, "receipts", completedRequest.id + ".json");
+    await atomicJson(completedPath, completed);
+    await f.engine.tick();
+    assert.equal((await receipt(f.bridge, request.id)).status, "failed");
+    assert.match((await receipt(f.bridge, request.id)).error, /Unsupported request protocol or operation/);
+    assert.deepEqual(await receipt(f.bridge, completedRequest.id), completed);
+  }
+  assert.deepEqual(f.state, stateBefore);
+  const stage = await client.stage(f.bridge, "demo", "main", f.artifact, "0.1.0");
   await f.engine.tick();
-  const result = await receipt(f.bridge, request.id);
-  assert.equal(result.status, "completed");
-  assert.equal(result.result.identityEvidence, "exact-unattributed-stage");
-  assert.deepEqual(f.state.persistent.mods.example[stagedId], before);
-  assert.equal(f.deployments(), 0);
-
-  f.state.persistent.mods.example[stagedId].attributes.source = "grailwright-local";
-  const partial = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  assert.match((await receipt(f.bridge, partial.id)).error, /exact trusted source/);
-});
-
-test("legacy publication fails closed on active-game, source, identity and staged-payload mismatches", async t => {
-  const { f, migrationPath, stagedId } = await legacyPublicationFixture(t);
-  f.activeGame("another-game");
-  const inactive = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  assert.match((await receipt(f.bridge, inactive.id)).error, /Activate game/);
-  f.activeGame("example");
-  f.state.persistent.mods.example[stagedId].attributes.source = "other";
-  const source = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  const sourceError = (await receipt(f.bridge, source.id)).error;
-  assert.match(sourceError, /exact trusted source/);
-  assert.match(sourceError, /actual=.*"source":"other"/);
-  assert.match(sourceError, /expected=.*"source":"grailwright-local"/);
-  f.state.persistent.mods.example[stagedId].attributes.source = "grailwright-local";
-  f.state.persistent.mods.example[stagedId].attributes.logicalFileName = "Unexpected Alias";
-  const alias = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  assert.match((await receipt(f.bridge, alias.id)).error, /exact trusted source/);
-  f.state.persistent.mods.example[stagedId].attributes.logicalFileName = "Legacy Demo";
-  f.state.persistent.mods.example[stagedId].attributes.modId = 99;
-  const wrongId = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  assert.match((await receipt(f.bridge, wrongId.id)).error, /exact trusted source/);
-  f.state.persistent.mods.example[stagedId].attributes.modId = 1;
-  f.state.persistent.mods.example[stagedId].attributes.vdbProjectId = "conflict";
-  const ownership = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  assert.match((await receipt(f.bridge, ownership.id)).error, /conflicting VDB ownership/);
-  delete f.state.persistent.mods.example[stagedId].attributes.vdbProjectId;
-  await fs.writeFile(path.join(f.staging, stagedId, "data.bin"), "drift");
-  const drift = await client.legacyPublicationMigration(f.bridge, "demo", "main", stagedId, migrationPath, false);
-  await f.engine.tick();
-  assert.match((await receipt(f.bridge, drift.id)).error, /differs from the trusted release archive/);
-  assert.equal(f.deployments(), 0);
-  assert.equal(f.state.persistent.mods.example[stagedId].attributes.source, "grailwright-local");
+  assert.equal((await receipt(f.bridge, stage.id)).status, "completed");
+  const status = await client.status(f.bridge);
+  assert.ok(!status.capabilities.some(operation => operation.startsWith("legacy-publication-")));
 });
 
 module.exports = { fixture };

@@ -22,12 +22,14 @@ test("CLI accepts an exact project/package reconcile request", () => {
   assert.deepEqual(parse(["reconcile", "--project", "demo", "--package", "main"]),
     { command: "reconcile", project: "demo", package: "main" });
 });
-test("CLI accepts explicit legacy publication dry-run and apply commands", () => {
-  const { parse } = require("../src/client/cli");
-  const args = ["--project", "demo", "--package", "main", "--staged-id", "Legacy Demo 0.1.0", "--migration", "migration.json"];
-  assert.deepEqual(parse(["legacy-publication-dry-run", ...args]), { command: "legacy-publication-dry-run", project: "demo", package: "main",
-    "staged-id": "Legacy Demo 0.1.0", migration: "migration.json" });
-  assert.equal(parse(["legacy-publication-apply", ...args]).command, "legacy-publication-apply");
+test("CLI rejects retired migration commands without creating queue data", async t => {
+  const { main } = require("../src/client/cli");
+  const root = await scratch(t);
+  for (const command of ["legacy-publication-dry-run", "legacy-publication-apply"]) {
+    await assert.rejects(main([command, "--bridge", root]), /Unknown command/);
+  }
+  assert.deepEqual(await fs.readdir(root), []);
+  assert.doesNotMatch(await main(["help"]), /legacy-publication|--migration|--staged-id/);
 });
 async function scratch(t) {
   const root = path.resolve(".codex-temp/tests");

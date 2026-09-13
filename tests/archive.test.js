@@ -34,6 +34,32 @@ test("built extension has root metadata and a working standalone client", async 
   assert.equal(info.version, require("../package.json").version);
   const help = execFileSync(process.execPath, [path.join(latest.run, "extension/client/vdb.cjs"), "help"], { encoding: "utf8" });
   assert.match(help, /Vortex Development Bridge/);
+  assert.match(help, /finish-batch/);
+  assert.match(help, /--stage-only/);
+});
+
+test("bundled client prepares durable stage-only work offline without needing a profile", async t => {
+  let latest;
+  try { latest = await readJson(path.resolve("dist/latest.json")); }
+  catch (error) { if (error.code === "ENOENT") return; throw error; }
+  const parent = path.resolve(".codex-temp/tests");
+  await fs.mkdir(parent, { recursive: true });
+  const root = await fs.mkdtemp(path.join(parent, "bundled-finish-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const clientPath = path.join(latest.run, "extension/client/vdb.cjs");
+  const bridge = path.join(root, "bridge"), artifact = path.join(root, "artifact"), config = path.join(root, "vdb.json");
+  await fs.mkdir(artifact); await fs.writeFile(path.join(artifact, "demo.bin"), "final");
+  await fs.writeFile(config, JSON.stringify({ schemaVersion: 1, id: "demo", gameId: "demo",
+    packages: [{ id: "main", displayName: "Main", installation: "prepared-directory", activation: "replace-enabled-version" }] }));
+  const invoke = args => JSON.parse(execFileSync(process.execPath, [clientPath, ...args, "--bridge", bridge, "--json"], { encoding: "utf8" }));
+  invoke(["register", "--config", config]);
+  const job = invoke(["finish", "--project", "demo", "--package", "main", "--artifact", artifact, "--version", "1.0.0", "--stage-only"]);
+  assert.equal(job.protocolVersion, 3);
+  const request = await readJson(path.join(bridge, "requests", job.id + ".json"));
+  assert.equal(request.payload.stageOnly, true); assert.equal(request.payload.profileId, null);
+  assert.equal(request.expiresAt, undefined);
+  assert.equal(invoke(["doctor"]).capabilities.includes("profile-finish-v3"), true);
+  assert.equal(invoke(["cancel", "--request", job.id]).status, "cancelled");
 });
 
 test("bundled extension loads and registers its page without a local Node dependency tree", async () => {

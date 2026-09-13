@@ -1,6 +1,10 @@
 Vortex Operations
 =================
 
+For the normal final-package workflow use [durable finalization](finalization.md).
+The stage/deploy operations below are retained protocol-1 primitives; their saved
+activation policies do not override the explicit finish `--stage-only` option.
+
 The client snapshots a prepared directory into the local bridge before queuing
 staging. The extension obtains the active game's staging directory and the selected
 mod type's deployment directory through Vortex. It verifies copies before registering
@@ -34,54 +38,53 @@ receipt, then changes only their `logicalFileName` attribute to the configured
 canonical value. Compatible retained versions are inspected for collision safety
 but are not adopted, deleted, reinstalled, or otherwise rewritten.
 
-Legacy Publication Migration
-----------------------------
-
-`legacy-publication-dry-run` and `legacy-publication-apply` operate on one exact
-project/package/staged ID and a reviewed migration receipt. The client copies the
-receipt's archive into bridge-owned release storage and creates a locally trusted,
-signed receipt before queueing. Dry-run reads the active game's exact live record,
-staging directory, archive inventory, registered Nexus identity, and Vortex's exact
-Nexus metadata lookup using the retained original archive filename, then records the
-complete proposed metadata change without changing Vortex. Apply repeats every
-check and only then imports/verifies the exact archive through Vortex and writes
-canonical Nexus metadata. This keeps a batch from reaching apply when any candidate
-is not yet indexed. It never creates VDB ownership, changes profile state, deploys,
-deletes, reinstalls, or adopts a different staged record.
-
-The signed receipt may separately set `nexus.allowUnattributedArchive` when the
-retained Nexus release receipt has already proved the archive and publication IDs.
-The metadata lookup may then return exactly one archive with the expected MD5 and
-byte size and no source, mod ID, file ID, or filename. The bridge records this as
-`exact-unattributed-archive` and derives the Nexus metadata only from that signed
-receipt. Multiple fingerprint matches, any partial attribution, or a fingerprint
-mismatch still fail closed. This exception is independent of the staged identity
-tuple and unavailable to ordinary promotion.
-
-The receipt must require source `grailwright-local`, its exact logical filename,
-page ID, version, SHA-256, MD5, size, and Nexus file/version IDs. Those four live
-identity fields normally must match. A locally signed receipt may explicitly allow
-a wholly unattributed legacy record when the retired staging workflow created the
-exact folder before its grouping request was consumed. That exception applies only
-when all four fields are absent and the staged ID, installation path, complete
-folder inventory, archive fingerprints, release receipt, and current package Nexus
-identity agree. Partial metadata, an alias, conflicting ownership, a payload
-difference, or any identity mismatch remains terminal. An already exact,
-archive-linked migrated record is reported as `already-migrated` without another
-Vortex write.
-
-Vortex can return an imported archive ID before its download record has finished
-hashing. Apply waits for that exact returned record to retain the expected MD5 and
-size before writing mod attributes or linking the archive.
-Bridge-owned release copies use a content-addressed `vdb-<sha256>.zip` basename when
-passed to Vortex, preventing unrelated retained releases from colliding as a generic
-`release.zip`. The signed original filename remains the metadata-lookup and display
-identity; no existing download archive is replaced.
+Bridge-owned release copies use a content-addressed `vdb-<sha256>.zip` basename
+when passed to Vortex, preventing unrelated releases from colliding as `release.zip`.
+Promotion waits for the imported download record to retain the exact MD5 and size
+before changing mod attributes or linking the archive.
 
 The bridge checks live file hashes against the game's deployment root. Additional
 unrelated live files are permitted. A difference is reported rather than claiming
 which competing mod won. Custom filename transformations are not supported by the
 prepared-directory mode and need an adapter before declaring live verification.
+
+Conflict inheritance
+--------------------
+
+Before explicit activation, a new untouched build inherits active `before`/`after`
+rules from the single previous enabled compatible version. File override entries
+retain their exact Vortex values only for paths present in the new prepared payload;
+removed paths are listed in the receipt. Staging alone changes no conflict settings.
+The same preflight runs for automatic replacement and coordinated batch deployment.
+
+Incoming ordering tied to the previous instance is represented by an equivalent
+inverse rule on the new build. The original owner is never rewritten, preserving
+older versions and other profiles. References already matching the new version are
+left alone. Batch references between replacing packages resolve to the new pair.
+Vortex's supported reference matcher must still accept every transferred reference
+after replacing its local ID; archive, source and version constraints are not relaxed.
+Custom incoming rules that cannot be safely inverted stop activation for review.
+Dependencies, recommendations, incompatibility and collection rules are not inherited
+or rewritten by this feature. Ignored ordering rules are not re-enabled.
+
+Existing target choices, including empty lists and any game-profile history, are
+preserved. Retained stages created before this feature are not assumed to be fresh.
+Rollback keeps the retained build's settings rather than copying the outgoing build's
+choices onto it. This feature therefore does not retroactively repair earlier losses.
+
+All batch inheritance plans are checked before any rule changes. Multiple possible
+source versions, ambiguous local rule matches and cycles among the proposed enabled
+mods stop the operation. This preflight covers locally stored ordering; Vortex remains
+responsible for its full deployment checks, including metadata-supplied rules.
+Plans are journaled, concurrent mod/profile changes are rejected, and an interrupted
+application is marked for inspection. This is not a transaction across Vortex actions.
+See [the protocol](protocol.md) for inheritance markers and receipt fields.
+
+Automated coverage uses a fake Vortex API. Real conflict winner behavior, profile
+isolation and upgrade/rollback acceptance remain VDB-16 in the manual matrix.
+Live-byte verification remains strict; intentional overrides still appear as
+differences, including to Sovereign's propagation consumer.
+
 
 Recovery
 --------

@@ -5,15 +5,36 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { atomicJson, readJson, fingerprint, lock } = require("./files");
 const { identifier } = require("./config");
-const OPERATIONS = ["stage", "deploy", "deploy-batch", "verify", "promote", "reconcile", "legacy-publication-dry-run", "legacy-publication-apply"];
+const OPERATIONS = ["stage", "deploy", "deploy-batch", "verify", "promote", "reconcile"];
 
 function validateRequest(request, now = Date.now()) {
-  if (request.protocolVersion !== 1 || !OPERATIONS.includes(request.operation)) throw new Error("Unsupported request protocol or operation");
+  const durable = [2, 3].includes(request.protocolVersion) && request.operation === "finish";
+  if (!durable && (request.protocolVersion !== 1 || !OPERATIONS.includes(request.operation))) throw new Error("Unsupported request protocol or operation");
   if (!/^[a-f0-9-]{36}$/.test(request.id || "")) throw new Error("Invalid request ID");
   identifier(request.projectId, "project ID");
   identifier(request.packageId, "package ID");
-  if (!Number.isFinite(Date.parse(request.expiresAt)) || Date.parse(request.expiresAt) <= now) throw new Error("Request expired; submit a new request after reviewing current state");
-  if (Date.parse(request.expiresAt) > now + 24 * 60 * 60 * 1000) throw new Error("Request expiry exceeds 24 hours");
+  if (!durable) {
+    if (!Number.isFinite(Date.parse(request.expiresAt)) || Date.parse(request.expiresAt) <= now) throw new Error("Request expired; submit a new request after reviewing current state");
+    if (Date.parse(request.expiresAt) > now + 24 * 60 * 60 * 1000) throw new Error("Request expiry exceeds 24 hours");
+  } else {
+    if (!Number.isSafeInteger(request.generation) || request.generation < 1 || !Number.isFinite(Date.parse(request.createdAt))) throw new Error("Invalid finish generation");
+    const p = request.payload;
+    if (!p || typeof p.stageOnly !== "boolean" || !Array.isArray(p.builds) || !p.builds.length || p.builds.length > 100) throw new Error("Finish needs 1-100 prepared builds and an explicit mode");
+    if (request.protocolVersion === 2 && !p.stageOnly && (typeof p.profileId !== "string" || !p.profileId.trim())) throw new Error("Finish deployment requires an explicit profile");
+    if (request.protocolVersion === 3) {
+      if (!["all", "profile", "stage-only"].includes(p.profileScope)
+          || p.stageOnly !== (p.profileScope === "stage-only")
+          || (p.profileScope === "profile" ? typeof p.profileId !== "string" || !p.profileId.trim() : p.profileId !== null)) throw new Error("Invalid finish profile scope");
+    }
+    const packages = new Set();
+    for (const build of p.builds) {
+      identifier(build.packageId, "package ID");
+      if (packages.has(build.packageId)) throw new Error("Finish selects multiple builds for one package");
+      packages.add(build.packageId);
+      if (!/^[a-f0-9]{24}$/.test(build.buildId || "")) throw new Error("Invalid finish build identity");
+    }
+    if (p.builds[0].packageId !== request.packageId) throw new Error("Finish package identity differs");
+  }
   if (!request.configHash || !request.payload) throw new Error("Request lacks configuration identity or payload");
   return request;
 }

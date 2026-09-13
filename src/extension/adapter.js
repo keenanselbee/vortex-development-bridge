@@ -1,7 +1,10 @@
 "use strict";
 
+const { isDeepStrictEqual } = require("node:util");
+const { planConflictInheritance } = require("./conflicts");
+
 // Vortex is injected so the same contracts can be exercised without a live game.
-function createAdapter(api, vortex) {
+function createAdapter(api, vortex, options = {}) {
   function context(gameId, profileId, allowInactive = false) {
     const state = api.getState();
     if (!allowInactive && vortex.selectors.activeGameId(state) !== gameId) {
@@ -11,10 +14,20 @@ function createAdapter(api, vortex) {
     }
     const activeProfile = vortex.selectors.activeProfile(state);
     const profile = activeProfile?.gameId === gameId ? activeProfile : undefined;
-    if (profileId && (profile?.id !== profileId || profile.gameId !== gameId)) throw new Error("The requested profile is not active; no profile was switched");
+    if (profileId && (profile?.id !== profileId || profile.gameId !== gameId)) {
+      const error = new Error("The requested profile is not active; no profile was switched");
+      error.code = "VDB_INACTIVE_PROFILE";
+      throw error;
+    }
     const stagingRoot = vortex.selectors.installPathForGame(state, gameId);
     if (!stagingRoot) throw new Error("Vortex has no staging directory for this game");
     return { state, profile, stagingRoot, mods: state.persistent?.mods?.[gameId] || {} };
+  }
+  function profileContext(gameId, profileId) {
+    const base = context(gameId, undefined, true);
+    const profile = base.state.persistent?.profiles?.[profileId];
+    if (!profile || profile.gameId !== gameId || profile.pendingRemove) throw new Error("Target profile is missing or belongs to another game");
+    return { ...base, profile };
   }
   function callbackEvent(name, args, timeout = 30000, callbackFirst = false) {
     return new Promise((resolve, reject) => {
@@ -42,30 +55,16 @@ function createAdapter(api, vortex) {
     } while (Date.now() < deadline);
     throw new Error("Vortex did not retain the requested attributes");
   }
-  async function nexusMetadata(gameId, release, archivePath, fileName, allowUnattributed = false) {
+  async function nexusMetadata(gameId, release, archivePath, fileName) {
     if (typeof api.lookupModMeta !== "function") throw new Error("Vortex metadata lookup is unavailable");
     const queryFileName = fileName || "release.zip";
     const results = await api.lookupModMeta({ fileName: queryFileName, filePath: archivePath,
       fileMD5: release.md5, fileSize: release.size, gameId });
     const candidates = (results || []).map(x => x.value || x);
-    let metadata = candidates.find(x => x.source === "nexus"
+    const metadata = candidates.find(x => x.source === "nexus"
       && String(x.details?.modId) === String(release.gameScopedModId)
       && String(x.details?.fileId) === String(release.gameScopedFileId)
       && String(x.fileMD5).toLowerCase() === release.md5 && Number(x.fileSizeBytes) === release.size);
-    let evidence = "verified";
-    if (!metadata && allowUnattributed) {
-      const exactArchives = candidates.filter(x => String(x.fileMD5 || "").toLowerCase() === release.md5
-        && Number(x.fileSizeBytes) === release.size);
-      const candidate = exactArchives.length === 1 ? exactArchives[0] : undefined;
-      const whollyUnattributed = candidate && candidate.source == null && candidate.details?.modId == null
-        && candidate.details?.fileId == null && candidate.fileName == null;
-      if (whollyUnattributed) {
-        metadata = { ...candidate, source: "nexus", details: { ...(candidate.details || {}),
-          modId: Number(release.gameScopedModId), fileId: Number(release.gameScopedFileId) },
-        fileMD5: release.md5, fileSizeBytes: release.size, fileName: queryFileName };
-        evidence = "exact-unattributed-archive";
-      }
-    }
     if (!metadata) {
       const observed = candidates.slice(0, 10).map(candidate => ({
         source: candidate?.source ?? null,
@@ -81,11 +80,11 @@ function createAdapter(api, vortex) {
       error.code = "VDB_RETRYABLE";
       throw error;
     }
-    return { metadata, evidence };
+    return metadata;
   }
 
-  async function verifiedNexusArchive(gameId, release, archivePath, fileName, allowUnattributed = false) {
-    const { metadata, evidence } = await nexusMetadata(gameId, release, archivePath, fileName, allowUnattributed);
+  async function verifiedNexusArchive(gameId, release, archivePath, fileName) {
+    const metadata = await nexusMetadata(gameId, release, archivePath, fileName);
     const exactDownload = download => String(download?.fileMD5 || "").toLowerCase() === release.md5
       && Number(download?.size) === release.size;
     const downloads = api.getState().persistent?.downloads?.files || {};
@@ -104,7 +103,7 @@ function createAdapter(api, vortex) {
     if (!exactDownload(api.getState().persistent?.downloads?.files?.[downloadId])) {
       throw new Error("Imported archive identity has not been verified after Vortex settled the download record");
     }
-    return { metadata, metadataEvidence: evidence, downloadId };
+    return { metadata, downloadId };
   }
   function linkArchive(gameId, stagedId, downloadId, metadata) {
     api.store.dispatch(vortex.actions.setModArchiveId(gameId, stagedId, downloadId));
@@ -114,9 +113,39 @@ function createAdapter(api, vortex) {
   }
   return {
     context,
-    async verifyNexusMetadata(gameId, release, archivePath, fileName, allowUnattributed = false) {
-      const { evidence } = await nexusMetadata(gameId, release, archivePath, fileName, allowUnattributed);
-      return { status: evidence };
+    profileContext,
+    profiles(gameId) {
+      return Object.values(api.getState().persistent?.profiles || {}).filter(p => p.gameId === gameId && !p.pendingRemove).map(p => p.id).sort();
+    },
+    async replaceDisabled(gameId, profileId, target, siblings, expected) {
+      const { profile } = profileContext(gameId, profileId);
+      if (!isDeepStrictEqual(profile.modState || {}, expected)) throw new Error("Profile changed before disabled-version selection");
+      if (siblings.some(id => profile.modState?.[id]?.enabled) || profile.modState?.[target]?.enabled) throw new Error("Disabled selection cannot replace an enabled mod");
+      if (typeof vortex.actions.setProfile !== "function") throw new Error("Vortex profile update action is unavailable");
+      // Transfer the package's existing selection history atomically, never enable it.
+      // Older builds stay installed for rollback; only this profile's records move.
+      const previous = siblings.map(id => profile.modState[id]).sort((a, b) => (b.enabledTime || 0) - (a.enabledTime || 0))[0] || {};
+      const modState = structuredClone(profile.modState || {});
+      for (const id of siblings) delete modState[id];
+      modState[target] = { ...previous, ...modState[target], enabled: false };
+      api.store.dispatch(vortex.actions.setProfile({ id: profileId, modState }));
+      if (!isDeepStrictEqual(profileContext(gameId, profileId).profile.modState, modState)) throw new Error("Disabled-version selection did not settle");
+    },
+    async assertDeploymentReady(gameId, profileId) {
+      const { state } = context(gameId, profileId);
+      const pending = message => { const error = new Error(message); error.code = "VDB_WAITING"; throw error; };
+      const tools = state.session?.base?.toolsRunning;
+      if (tools && Object.keys(tools).length) pending("Waiting for running games or tools to close");
+      const gameRoot = state.settings?.gameMode?.discovered?.[gameId]?.path;
+      const game = vortex.util.getGame(gameId);
+      const executable = game?.executable?.(gameRoot);
+      if (!gameRoot || typeof executable !== "string" || !executable) pending("Waiting for a known game executable and installation path");
+      const { runningProcesses, gameProcess } = require("./processes");
+      let processes;
+      try { processes = await (options.runningProcesses || runningProcesses)(); }
+      catch (error) { pending(`Waiting for game-process verification: ${error.message}`); }
+      if (gameProcess(processes, gameRoot, executable)) pending("Waiting for the game to close");
+      context(gameId, profileId);
     },
     async register(gameId, mod) {
       await callbackEvent("create-mod", [gameId, mod]);
@@ -133,19 +162,55 @@ function createAdapter(api, vortex) {
       linkArchive(gameId, stagedId, downloadId, metadata);
       return { archiveId: downloadId, publication: "verified" };
     },
-    async legacyPublication(gameId, stagedId, migration, archivePath, canonical) {
-      context(gameId);
-      const release = { md5: migration.archive.md5, size: migration.archive.size,
-        gameScopedModId: migration.nexus.gameScopedModId, gameScopedFileId: migration.nexus.gameScopedFileId };
-      const { metadata, downloadId } = await verifiedNexusArchive(gameId, release, archivePath, migration.archive.fileName,
-        migration.nexus.allowUnattributedArchive);
-      await attributes(gameId, stagedId, {
-        source: "nexus", modId: Number(migration.nexus.gameScopedModId), fileId: Number(migration.nexus.gameScopedFileId),
-        version: migration.expected.version, logicalFileName: canonical, downloadGame: gameId,
-        fileMD5: migration.archive.md5, fileSize: migration.archive.size, vdbReleaseVersionId: migration.nexus.versionId,
-      });
-      linkArchive(gameId, stagedId, downloadId, metadata);
-      return { archiveId: downloadId, publication: "legacy-verified" };
+    async inheritConflicts(gameId, profileId, selections, progress, inactive = false) {
+      const getContext = () => inactive ? profileContext(gameId, profileId) : context(gameId, profileId);
+      const before = getContext();
+      const expected = structuredClone({ mods: before.mods, profiles: before.state.persistent?.profiles });
+      const assertUnchanged = () => {
+        const current = getContext();
+        if (!isDeepStrictEqual({ mods: current.mods, profiles: current.state.persistent?.profiles }, expected)) {
+          throw new Error("Vortex mods or profiles changed while planning or applying conflict inheritance; inspect the receipt before recovery");
+        }
+      };
+      const matches = (mod, reference) => {
+        if (typeof vortex.util.testModReference !== "function") throw new Error("Vortex rule matching API is unavailable; no conflict rules were changed");
+        return vortex.util.testModReference(mod, reference);
+      };
+      const updates = planConflictInheritance(before, selections, matches);
+      if (!updates.length) return;
+      if (typeof vortex.actions.setModAttribute !== "function"
+          || updates.some(update => update.disposition === "inherited")
+            && (typeof vortex.actions.addModRule !== "function" || typeof vortex.actions.setFileOverride !== "function")) {
+        throw new Error("Vortex conflict rule actions are unavailable; no conflict rules were changed");
+      }
+      await progress({ phase: "conflict-inheritance", conflictInheritance: updates });
+      assertUnchanged();
+      // Mark the whole batch before any rule write. Interrupted applications
+      // require inspection rather than guessing whether an empty list is fresh.
+      for (const update of updates) {
+        await attributes(gameId, update.target, { vdbConflictInheritance: "applying" });
+        expected.mods[update.target].attributes.vdbConflictInheritance = "applying";
+        assertUnchanged();
+      }
+      for (const update of updates) {
+        assertUnchanged();
+        if (update.disposition === "inherited") {
+          for (const rule of update.rules) api.store.dispatch(vortex.actions.addModRule(gameId, update.target, rule));
+          api.store.dispatch(vortex.actions.setFileOverride(gameId, update.target, update.fileOverrides));
+          const actual = api.getState().persistent.mods[gameId][update.target];
+          if (!isDeepStrictEqual(actual.rules || [], update.rules) || !isDeepStrictEqual(actual.fileOverrides, update.fileOverrides)) {
+            throw new Error("Vortex did not retain the inherited conflict choices; inspect the receipt before recovery");
+          }
+          if (update.rules.length) expected.mods[update.target].rules = structuredClone(update.rules);
+          expected.mods[update.target].fileOverrides = [...update.fileOverrides];
+          assertUnchanged();
+        }
+      }
+      for (const update of updates) {
+        await attributes(gameId, update.target, { vdbConflictInheritance: "initialized" });
+        expected.mods[update.target].attributes.vdbConflictInheritance = "initialized";
+        assertUnchanged();
+      }
     },
     async activate(gameId, profileId, target, siblings) {
       context(gameId, profileId);
