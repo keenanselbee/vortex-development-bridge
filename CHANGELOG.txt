@@ -1,13 +1,33 @@
+0.1.3
+- Automatically recovers locks whose owner process has exited, serializing recovery and retaining abandoned lock evidence.
+- Waits briefly for active operations and keeps ordinary consumer contention quiet while preserving live or unverifiable owners.
+- Cleans up owned locks on normal process exit and dismisses stale error notifications after successful processing.
+
+0.1.2
+- Defaults finalization to all profiles for the registered game, with explicit profile targeting retained.
+- Updates disabled version selections without enabling or deploying them; absent packages remain absent.
+- Keeps enabled-profile work queued until its profile is active and deployment is safe, recording each profile's outcome independently.
+- Supports migration from timestamped development versions to newer regular versions and preserves explicit stage-only behavior.
+- Adds profile-finish-v3 capability negotiation while retaining existing protocol-1 and protocol-2 requests.
+
+0.1.1
+- Adds finalization that stages verified packages and updates enabled versions when the intended profile is active and the game is closed.
+- Keeps explicit stage-only finalization available in the page and client without a profile or any activation/deployment side effects.
+- Retains offline finalization intents until completed, cancelled or superseded; newer pending updates replace only overlapping package/profile selections.
+- Verifies Windows game processes, preserves disabled and newer selected versions, and batches activation into one deployment after preflight.
+- Records waiting and partial-effect states without automatically replaying failed or interrupted deployment.
+- Requires the updated client and extension for protocol-2 finalization; existing protocol-1 commands keep their expiring behavior. New live acceptance remains pending.
+
 0.1.0
+- Inherits conflict ordering and surviving file overrides on first activation of new untouched builds, preserving retained versions and other profiles.
 - Introduces project registration, immutable prepared builds, explicit profile deployment, verification and retained-version rollback.
 - Adds expiring local requests and durable operation receipts.
-- Adds a Vortex page and command-line client.
+- Adds a Vortex page and command-line client, including visible build IDs for same-version rollback choices.
 - Defers runtime API access until Vortex's supported once lifecycle so the extension loads on Vortex 2.6.3.
 - Allows stage-only packages to use another managed game's configured staging path without switching the active game or profile.
 - Separates canonical Vortex logical filenames from private project/package/build ownership and adds guarded reconciliation for retained VDB variants.
-- Adds locally signed, receipt-backed dry-run and apply operations for exact legacy Nexus publication metadata, including a fail-closed exception for wholly unattributed stages whose IDs, paths, archives, and payloads all match.
-- Retains the original archive filename, verifies exact Nexus metadata during dry-run, and permits a signed wholly-unattributed migration only when Vortex returns one exact MD5-and-size archive with no conflicting attribution.
 - Waits for Vortex's imported download record to retain the expected fingerprint before linking it or changing mod metadata.
 - Retries transient Windows receipt-file rename contention without replaying the operation.
 - Imports bridge-owned releases under content-addressed filenames so retained Vortex downloads never collide as `release.zip`.
-- Development release: live installation, Grailwright BepInEx staging, canonical grouping, explicit Test-profile activation/deployment/verification/rollback, and guarded legacy migration are qualified; Sovereign layouts and public publication remain pending.
+- Retires the completed one-time Grailwright publication migration while preserving historical receipts and normal version compatibility.
+- Development release: Grailwright BepInEx staging, canonical grouping and explicit Test-profile activation/deployment/verification/rollback have recorded live passes; packaged installation, remaining failure/recovery checks, Sovereign layouts and public publication remain pending.

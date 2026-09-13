@@ -8,7 +8,7 @@ const { createZip } = require("../src/protocol/archive");
 
 async function build() {
   const repo = path.resolve(__dirname, "..");
-  const publicDocs = ["workflow.md", "protocol.md", "vortex-operations.md", "nexus-workflow.md", "test-matrix.md"];
+  const publicDocs = ["workflow.md", "protocol.md", "vortex-operations.md", "finalization.md", "nexus-workflow.md", "test-matrix.md", "migration-retirement.md", "public-release-checklist.md"];
   const sourceHashes = {};
   for (const directory of ["src", "examples", "schemas"]) {
     for (const file of await inventory(path.join(repo, directory))) sourceHashes[`${directory}/${file.path}`] = file.sha256;

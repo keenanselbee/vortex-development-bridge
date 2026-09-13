@@ -1,1 +1,1 @@
-Connect mod development workflows to Vortex. Stage verified builds, manage development versions, deploy to a chosen profile, and inspect results through a Vortex page or command-line client.
+Connect your mod build workflow to Vortex. Stage verified builds, update versions across game profiles while preserving enabled and disabled states, and queue deployment until safe. Includes a Vortex page and command-line client.

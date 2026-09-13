@@ -1,32 +1,72 @@
-[center][size=6][b]Vortex Development Bridge[/b][/size]
-[i]Bring your mod development workflow into Vortex.[/i][/center]
+[center][color=#DA8E35][size=6]Vortex Development Bridge[/size][/color]
+[i]Keep building your mods while the bridge handles the Vortex busywork.[/i][/center]
 
-Vortex Development Bridge connects repository scripts and command-line tools to Vortex. Register a project, stage a prepared build, activate a retained version and inspect the outcome from one consistent workflow.
+[line]
 
-[size=4][b]Development preview[/b][/size]
-This version is under development. Automated checks cover isolated filesystem operations and a simulated Vortex API. Live installation, upgrade and game-specific deployment qualification are pending. The project is not yet cleared for public release.
+[b]Vortex Development Bridge[/b] handles staging and deployment so you can focus on developing your mods. Queue multiple versions of the same mod even while Vortex is closed. When Vortex opens, the bridge stages the newest pending version, preserves each profile's enabled and disabled states, and deploys enabled updates when safe.
 
-[size=4][b]Features[/b][/size]
+[line]
+
+[heading][color=#DA8E35][size=5]Features[/size][/color][/heading]
 [list]
-[*]A Development Bridge page inside Vortex.
-[*]A command-line client for repository scripts and development agents.
-[*]Project and package identities that support multiple games and separate optional packages.
-[*]Prepared builds verified by file paths, sizes and SHA-256 hashes.
-[*]Retained build versions for explicit activation and rollback.
-[*]Coordinated package activation with one deployment after all selected builds pass verification.
-[*]Stage-only operation by default, with configurable updates to an enabled development version.
-[*]Expiring requests and operation receipts that distinguish completed, failed and interrupted work.
-[*]Repository publishing tools with authored Nexus descriptions, release journals and exact-archive metadata promotion.
+[*][b]Profile-aware updates:[/b] Update versions across game profiles while preserving enabled and disabled states. Enabled updates deploy when their profile is active and the game is closed; disabled updates do not deploy.[/*]
+[*][b]Verified builds:[/b] Retain prepared files with stable build identities and verify their paths, sizes and SHA-256 hashes.[/*]
+[*][b]Durable finalization:[/b] Queue completed builds while Vortex is closed, inspect waiting reasons, and cancel or supersede pending work.[/*]
+[*][b]Vortex and command-line control:[/b] Use the Development Bridge page or connect repository scripts and development agents through the bundled client. Choose Stage only whenever you want to retain a build without changing profiles.[/*]
+[*][b]Coordinated packages:[/b] Keep separate package identities for different games and optional components. Validate selected packages together and deploy once per eligible active profile.[/*]
+[*][b]Retained versions and clear results:[/b] Explicitly activate or roll back to an older build, with receipts distinguishing staging, waiting, deployment, verification, failure and interruption.[/*]
 [/list]
 
-[size=4][b]Installation and requirements[/b][/size]
-Install the release ZIP through Vortex's Extensions screen, enable it and restart Vortex. The extension runs inside Vortex. Using the separate command-line client requires Node.js 22 or newer.
+[line]
 
-[size=4][b]Getting started[/b][/size]
-Copy a supplied project example into your repository and configure its game, packages and installation layout. Register the configuration through the Development Bridge page or the client. Stage a directory already arranged in its final Vortex staging layout, then choose the intended active profile before deployment.
+[heading][color=#DA8E35][size=5]Install[/size][/color][/heading]
+Install the release ZIP through Vortex's Extensions screen, enable it and restart Vortex. This is a Vortex extension; install it in Extensions rather than as a game mod.
 
-[size=4][b]Compatibility[/b][/size]
-The bridge uses the game's existing Vortex support and mod types. Grailwright and Sovereign configurations are provided as integration examples; their production workflows are not migrated automatically. Game-specific build tools, archive installers and gameplay tests remain part of the project's own workflow.
+[line]
 
-[size=4][b]Troubleshooting[/b][/size]
+[heading][color=#DA8E35][size=5]Updating[/size][/color][/heading]
+Keep the extension and bundled client on compatible releases. Updates install through Vortex's Extensions screen and require a Vortex restart. Existing project registrations, retained builds and operation receipts are kept separately from the installed extension files.
+
+[line]
+
+[heading][color=#DA8E35][size=5]Requirements[/size][/color][/heading]
+The extension runs inside Vortex. Command-line use requires Node.js 22 or newer; the Vortex page does not require a separate Node.js installation. Your game must already be managed by Vortex with its staging and deployment paths configured. Local staging and deployment do not require Nexus credentials.
+
+[line]
+
+[heading][color=#DA8E35][size=5]Getting Started[/size][/color][/heading]
+Copy a supplied project example into your repository as vdb.json. Configure its game, stable package identities and Vortex mod type, then register it through the Development Bridge page or the client. Your build tools must produce a directory containing the final installation layout; the bridge does not compile source files or infer an archive installer layout.
+
+Call finish after the build and its checks are complete, or choose Update all game profiles on the Vortex page. The client snapshots the prepared files before returning a request ID, so later source edits cannot change the queued build. Use a new regular version number for changed package contents.
+
+[line]
+
+[heading][color=#DA8E35][size=5]Profiles and Deployment[/size][/color][/heading]
+[list]
+[*][b]Enabled mod:[/b] Update the version and deploy when that profile is active and the game is closed.[/*]
+[*][b]Disabled mod:[/b] Update its version selection, keep it disabled, and do not deploy it.[/*]
+[*][b]Mod absent from a profile:[/b] Leave it absent. The new build remains available in staging.[/*]
+[*][b]One profile only:[/b] Use Update active profile only, or pass --profile to the client.[/*]
+[*][b]Stage only:[/b] Retain the verified build without changing any profile's selection or deployment.[/*]
+[/list]
+
+The default covers existing profiles for the registered game. Vortex is never switched to another profile automatically. Queued finalization survives Vortex being closed and continues when the extension is running. Enabled updates wait for the appropriate profile and safe deployment conditions. A new mod must be enabled explicitly in the profiles where you want to use it.
+
+Older builds remain available for explicit rollback. Automatic updates do not downgrade a selected newer version or replace it with different contents under the same version number.
+
+[line]
+
+[heading][color=#DA8E35][size=5]Compatibility[/size][/color][/heading]
+The bridge uses the game's existing Vortex support and mod types. Prepared BepInEx and Elden Ring layouts are included as project examples, not universal installers. Game-specific build tools, package layout and gameplay checks remain part of your project's workflow. Automatic deployment currently uses Windows process checks; unsupported process inspection leaves the update waiting.
+
+Projects using the repository's separate publishing tools can also promote an exact build with its verified Nexus release metadata.
+
+[line]
+
+[heading][color=#DA8E35][size=5]Troubleshooting[/size][/color][/heading]
 Use the client doctor/status commands and inspect the operation receipt. Expired, failed and interrupted operations are not automatically replayed. Deployment verification compares expected files; differing live bytes can indicate another mod's override. Successful deployment does not establish gameplay correctness.
+
+[line]
+
+[heading][color=#DA8E35][size=5]Development Preview[/size][/color][/heading]
+This is a development preview. The current profile-update workflow has automated coverage; native acceptance of all-profile updates and disabled-version display is still pending. Earlier builds have recorded local staging, deployment and rollback checks. Validate your game's package layout before using the bridge in your regular setup.

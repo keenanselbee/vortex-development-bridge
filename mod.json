@@ -7,10 +7,10 @@
   "releaseReady": false,
   "nexus": {
     "gameDomain": "site",
-    "gameScopedModId": null,
-    "modId": null,
-    "groupId": null,
-    "url": null,
+    "gameScopedModId": "2303",
+    "modId": "9856949946623",
+    "groupId": "7955385",
+    "url": "https://www.nexusmods.com/games/site/mods/2303",
     "descriptionDirectory": ".",
     "apiSpecUrl": "https://api.nexusmods.com/openapi.yaml"
   }

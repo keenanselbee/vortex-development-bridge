@@ -1,5 +1,8 @@
-TargetVersion=0.1.0
-BaselineVersion=none
+TargetVersion=0.1.3
+BaselineVersion=0.0.1
 Introduced project registration and verified staging for prepared mod builds.
 Added explicit profile deployment and restoration of retained build versions.
 Added a Vortex page, bundled client and example project configurations.
+Added durable finalization across all game profiles, preserving disabled states and deploying enabled updates when each profile is active and the game is closed.
+Kept explicit stage-only use without activation or a required profile, with cancellation and supersession for pending finalization.
+Recovered confirmed abandoned locks automatically, preserved live and unverifiable owners, and cleared stale warnings after successful processing.

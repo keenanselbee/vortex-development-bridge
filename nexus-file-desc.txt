@@ -1,1 +1,1 @@
-Vortex extension with a bundled command-line client and example project configurations. Development preview; see the description for current requirements and validation status.
+Vortex Development Bridge extension, bundled command-line client, project templates and documentation. Install through Vortex's Extensions screen.

@@ -3,6 +3,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
+const metadata = require("../package.json");
+const dependencyLock = require("../package-lock.json");
+if (!/^\d+\.[0-9]\.[0-9]$/.test(metadata.version)
+    || dependencyLock.version !== metadata.version || dependencyLock.packages?.[""]?.version !== metadata.version) {
+  throw new Error("Release version must use MAJOR.MINOR.PATCH with single-digit MINOR/PATCH and match the lockfile root metadata");
+}
 function visit(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const file = path.join(dir, entry.name);
