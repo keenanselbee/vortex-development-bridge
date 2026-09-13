@@ -4,6 +4,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { createReadStream } = require("node:fs");
+const { lock } = require("./locks");
 
 function inside(root, relative) {
   if (typeof relative !== "string" || !relative || relative.includes("\\")
@@ -83,23 +84,6 @@ function differences(expected, actual) {
     const state = !a ? "unexpected" : !b ? "missing" : a.sha256 !== b.sha256 || a.size !== b.size ? "changed" : null;
     return state ? [{ path: name, state }] : [];
   });
-}
-
-async function lock(root, action) {
-  await fs.mkdir(root, { recursive: true });
-  const location = path.join(root, "operation.lock");
-  try { await fs.mkdir(location); }
-  catch (error) {
-    if (error.code === "EEXIST") throw new Error(`Operation locked: ${location}. Check for a running process before recovering a stale lock.`);
-    throw error;
-  }
-  try {
-    await atomicJson(path.join(location, "owner.json"), { pid: process.pid, startedAt: new Date().toISOString() });
-    return await action();
-  } finally {
-    await fs.rm(path.join(location, "owner.json"), { force: true });
-    await fs.rmdir(location);
-  }
 }
 
 module.exports = { inside, readJson, atomicJson, hash, inventory, fingerprint, differences, releaseArchiveName, lock };

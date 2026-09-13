@@ -100,10 +100,26 @@ metadata yet. Those receipts remain `pending` and are retried until completion o
 request expiry. Import/deployment timeouts and all other failures remain terminal
 because their side effects may be uncertain.
 
-The consumer uses a directory lock. After a process crash, inspect owner.json and
-confirm that process is no longer running before removing that specific stale lock.
-On the next run, a running receipt becomes interrupted. Late Vortex callbacks can
-still finish after a timeout; inspect the application before retrying.
+The consumer and client use directory locks with an owner PID and a unique
+ownership token. Contenders wait up to one second for an active operation; the
+consumer quietly retries on its next poll. Lock age never establishes abandonment.
+An existing PID, including a reused PID, remains protected. Only a confirmed
+missing process permits automatic recovery; process-inspection failures, malformed
+or missing owner records, and interrupted recovery guards require inspection.
+
+Recovery is serialized by a separate `.recovery` directory so competing callers
+cannot recover a replacement owner's lock. The abandoned lock is retained beside
+the original path as `.recovered-<unique-id>` for diagnosis. Normal process exit
+also attempts synchronous cleanup of only its own token; forced termination is
+handled by the next caller's owner check. A crash before owner metadata is written
+or during recovery can still require manual inspection. Never delete a lock just
+because it is old or a warning is visible.
+
+A successful consumer poll dismisses its previous error notification, including
+one retained across restart. Lock recovery does not replay operations: on the next
+run, a running receipt becomes interrupted under the existing receipt rules.
+Late Vortex callbacks can still finish after a timeout; inspect the application
+before retrying.
 
 References
 ----------
